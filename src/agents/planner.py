@@ -56,15 +56,11 @@ Query: {query}
 
 Return your analysis as JSON."""
 
-def plan(ctx: PipelineContext) -> PipelineContext:
+def plan(ctx: PipelineContext, api_key: str | None = None) -> PipelineContext:
     """Run the Planner agent on the query.
 
     Classifies query, extracts requirements, checks scope.
     """
-    from src.config import settings
-    if not settings.openrouter_api_key or settings.openrouter_api_key == "sk-or-your-key-here":
-        raise ValueError("OpenRouter API key is not configured. Please set the OPENROUTER_API_KEY environment variable.")
-
     system_prompt = PLANNER_SYSTEM_PROMPT
     user_prompt = PLANNER_USER_PROMPT.format(query=ctx.query)
 
@@ -73,6 +69,7 @@ def plan(ctx: PipelineContext) -> PipelineContext:
         system_prompt=system_prompt,
         temperature=0.1,
         max_tokens=512,
+        api_key=api_key,
     )
 
     if not response.success:

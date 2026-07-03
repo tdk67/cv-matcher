@@ -18,6 +18,7 @@ def run_pipeline(
     query: str,
     vector_store: CVVectorStore | None = None,
     max_retries: int | None = None,
+    api_key: str | None = None,
 ) -> PipelineContext:
     """Execute the full agentic RAG pipeline.
 
@@ -31,6 +32,7 @@ def run_pipeline(
         query: User's question
         vector_store: Pre-initialized store (optional, creates one if None)
         max_retries: Override max retry attempts
+        api_key: Per-request OpenRouter key (falls back to settings.openrouter_api_key)
 
     Returns:
         PipelineContext with all results
@@ -42,7 +44,7 @@ def run_pipeline(
     start_time = time.time()
 
     # Step 1: Plan
-    ctx = plan(ctx)
+    ctx = plan(ctx, api_key=api_key)
 
     # Early exit: out of scope
     if not ctx.is_in_scope:
@@ -86,10 +88,10 @@ def run_pipeline(
         ctx.retry_count = attempt
 
         # Respond
-        ctx = respond(ctx)
+        ctx = respond(ctx, api_key=api_key)
 
         # Validate
-        ctx = validate(ctx)
+        ctx = validate(ctx, api_key=api_key)
 
         if ctx.validation_passed:
             break

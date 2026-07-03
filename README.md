@@ -19,6 +19,7 @@ When hiring or staffing a project, managers need to quickly identify which peopl
 - **QA retry loop**: Validator checks answer quality; if rejected, Responder retries with feedback (max 3 attempts)
 - **Dashboard**: Ingestion stats, query performance, evaluation results
 - **Synthetic data generator**: 20 diverse personas across 8 role categories
+- **Bring-your-own API key**: Enter an OpenRouter key in the frontend sidebar; it's sent per-request as a header and never stored server-side — lets you run a public deployment without baking your own key into it
 
 ## Architecture
 
@@ -55,6 +56,42 @@ User → Streamlit Frontend (app.py) → FastAPI Backend (src/main.py)
 | **Ingestion** | Same scanner on document chunks | Instructions embedded in uploaded documents |
 | **Scope** | Planner offline/LLM classification | Out-of-scope queries (weather, code, poems) |
 | **Output** | Validator agent with retry loop | Hallucinated claims, missing citations, incomplete answers |
+
+## API Key Handling
+
+All OpenRouter calls (Planner, Responder, Validator) accept a per-request key:
+
+1. The frontend sends the key entered in the sidebar as an `X-OpenRouter-Key` header on every request.
+2. The backend uses that header's key if present; otherwise it falls back to `OPENROUTER_API_KEY` from `.env` / `config.json` (convenient for local dev).
+3. **Neither the frontend nor the backend ever writes the key to disk or logs it.**
+4. `GET /api/key/validate` (sidebar "Validate Key" button) checks the key against OpenRouter's own `/api/v1/auth/key` endpoint — free, doesn't consume completion credits, and reports usage/limit if valid.
+
+For a public deployment where you don't want your own key exposed or spent by strangers, leave `OPENROUTER_API_KEY` unset in the deployment environment — every visitor must then supply their own key to use Query or Evaluation (document upload doesn't need a key at all; ingestion never calls an LLM).
+
+## Deployment
+
+A single `Dockerfile` packages both the FastAPI backend and the Streamlit frontend into one container (`docker-entrypoint.sh` starts the backend, waits for it to become healthy, then starts the frontend, which talks to the backend over `localhost`).
+
+```bash
+docker build -t agentic-rag-cv .
+
+docker run -p 8501:8501 -p 8000:8000 \
+  -v cvmatcher_data:/app/.data \
+  agentic-rag-cv
+```
+
+- Open the app at `http://localhost:8501`.
+- The `-v cvmatcher_data:/app/.data` volume persists the ChromaDB knowledge base, uploads, evaluation history, and logs across container restarts — omit it for a fully ephemeral deployment.
+- Do **not** set `OPENROUTER_API_KEY` in the container's environment for a public deployment — see [API Key Handling](#api-key-handling) above.
+
+### Where to host it
+
+This app needs two long-running processes (not short-lived serverless functions), local disk for ChromaDB persistence, and a sizeable image (torch + tensorflow + sentence-transformers push it into the multi-GB range). That combination rules out **Vercel** — it's built for serverless functions and static/Next.js sites with short execution limits and no persistent local disk, not long-lived Docker services with WebSocket connections (which is how Streamlit works).
+
+Better fits for this Dockerfile:
+- **Railway / Render / Fly.io** — straightforward Docker deploys with persistent volumes and generous-enough free/hobby tiers. Probably the least friction.
+- **A plain VM** (DigitalOcean, Hetzner, EC2) running `docker run` directly — full control, disk persists by default, no serverless constraints.
+- **Google Cloud Run** — works, but only exposes one public port per service and has an ephemeral filesystem by default. Since only the Streamlit frontend needs to be internet-facing (it calls FastAPI over `localhost` inside the same container), you can deploy the container as-is exposing port 8501 only; add a mounted volume (or accept that the knowledge base resets on redeploy/scale-to-zero) for persistence.
 
 ## Installation
 
@@ -127,10 +164,14 @@ python -m src.data.cli --count 20 --seed 123
 curl -X POST http://localhost:8000/api/documents/upload \
   -F "file=@cv.pdf"
 
-# Ask a question
+# Ask a question (X-OpenRouter-Key is optional if OPENROUTER_API_KEY is set server-side)
 curl -X POST http://localhost:8000/api/query/ \
   -H "Content-Type: application/json" \
+  -H "X-OpenRouter-Key: sk-or-..." \
   -d '{"question": "Find a Java developer"}'
+
+# Check whether a key is valid
+curl http://localhost:8000/api/key/validate -H "X-OpenRouter-Key: sk-or-..."
 
 # List documents
 curl http://localhost:8000/api/documents/
@@ -170,15 +211,20 @@ agentic-rag-cv/
 ├── config.json                 # Global configuration defaults
 ├── .env.example                # Template for OPENROUTER_API_KEY secret
 ├── README.md                   # This file
-├── run.sh                      # Convenience run script
+├── run.sh                      # Convenience run script (local dev)
+├── Dockerfile                  # Backend + frontend packaged into one container
+├── docker-entrypoint.sh        # Starts backend, waits for health, then starts frontend
+├── .dockerignore
 ├── src/
 │   ├── config.py               # Settings loader (merges config.json + .env)
 │   ├── main.py                 # FastAPI app with route registration
 │   ├── api/                    # API route handlers
+│   │   ├── deps.py             # Shared dependencies (per-request OpenRouter key extraction)
+│   │   ├── apikey.py           # GET /validate — checks a key against OpenRouter, no server-side storage
 │   │   ├── documents.py        # Upload, list, remove documents
 │   │   ├── query.py            # Query knowledge base
 │   │   ├── dashboard.py        # Dashboard statistics
-│   │   ├── evaluation.py       # Run evaluation suite
+│   │   ├── evaluation.py       # Background evaluation run + progress polling
 │   │   └── synthetic.py        # Generate sample data
 │   ├── agents/                 # Agentic RAG pipeline
 │   │   ├── context.py          # PipelineContext dataclass
@@ -204,7 +250,9 @@ agentic-rag-cv/
 │   │   └── cli.py              # CLI entry point
 │   └── utils/
 │       ├── query_log.py        # Query statistics tracking
-│       └── json_parser.py      # Robust JSON cleaner and parser
+│       ├── json_parser.py      # Robust JSON cleaner and parser
+│       ├── json_store.py       # Shared read/append helpers for JSON-file-backed storage
+│       └── filenames.py        # Mojibake filename repair (shared across upload/query/delete)
 ├── tests/                      # pytest test suite (54 tests)
 │   ├── resources/
 │   │   └── default_questions.json # Evaluation question dataset (test-local resource)
@@ -236,7 +284,7 @@ agentic-rag-cv/
 
 5. **No persistence of query history**: Query log is JSON-file-backed. Not suitable for high-volume production use.
 
-6. **Single-user**: No authentication, no multi-user support. Designed for demonstration, not shared deployment.
+6. **Shared knowledge base, no auth**: Each visitor can bring their own OpenRouter key (see API Key Handling), but the uploaded CVs and ChromaDB knowledge base are global — anyone who can reach a public deployment can see, query, and delete the same documents. Fine for a personal demo behind an unlisted URL; not a substitute for real multi-tenancy or access control.
 
 ## Testing
 

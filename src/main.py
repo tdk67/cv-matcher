@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.config import settings
-from src.api import documents, query, dashboard, evaluation, synthetic
+from src.api import documents, query, dashboard, evaluation, synthetic, apikey
 
 
 def _configure_logging() -> None:
@@ -87,6 +87,7 @@ app.include_router(query.router, prefix="/api/query", tags=["query"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(evaluation.router, prefix="/api/evaluation", tags=["evaluation"])
 app.include_router(synthetic.router, prefix="/api/synthetic", tags=["synthetic"])
+app.include_router(apikey.router, prefix="/api/key", tags=["key"])
 
 
 @app.exception_handler(Exception)

@@ -132,7 +132,9 @@ class TestOrchestrator:
         
         key_configured = bool(settings.openrouter_api_key and settings.openrouter_api_key != "sk-or-your-key-here")
         if not key_configured:
-            with pytest.raises(ValueError):
+            # No key resolves (server-side or per-request) -> the LLM call
+            # fails cleanly and the Planner surfaces it as a RuntimeError.
+            with pytest.raises(RuntimeError):
                 run_pipeline(query="Find Python developer", vector_store=sample_store)
             return
 

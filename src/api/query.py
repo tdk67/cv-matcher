@@ -4,10 +4,11 @@ import unicodedata
 from collections import defaultdict
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from src.agents.orchestrator import run_pipeline
+from src.api.deps import get_api_key
 from src.utils.filenames import repair_mojibake_filename
 from src.utils.query_log import log_query, QueryLogEntry
 
@@ -55,11 +56,12 @@ def _normalize_filename_key(name: str) -> str:
 
 
 @router.post("/", response_model=QueryResponse)
-def query_knowledge_base(request: QueryRequest):
+def query_knowledge_base(request: QueryRequest, api_key: str | None = Depends(get_api_key)):
     """Ask a question. The agentic pipeline plans, retrieves, generates, and validates."""
     ctx = run_pipeline(
         query=request.question,
         max_retries=request.max_retries,
+        api_key=api_key,
     )
 
     # Group retrieved chunks by normalized source filename once, instead of

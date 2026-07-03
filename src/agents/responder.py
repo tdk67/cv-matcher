@@ -70,7 +70,7 @@ Retrieved Context:
 Generate your answer as JSON."""
 
 
-def respond(ctx: PipelineContext) -> PipelineContext:
+def respond(ctx: PipelineContext, api_key: str | None = None) -> PipelineContext:
     """Run the Responder agent.
 
     Generates an answer with citations and match scores.
@@ -112,6 +112,7 @@ def respond(ctx: PipelineContext) -> PipelineContext:
         system_prompt=RESPONDER_SYSTEM_PROMPT,
         temperature=0.2,
         max_tokens=2048,
+        api_key=api_key,
     )
 
     if not response.success:

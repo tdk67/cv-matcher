@@ -32,6 +32,7 @@ async def call_llm(
     temperature: float = 0.3,
     max_tokens: int = 2048,
     response_format: str | None = None,
+    api_key: str | None = None,
 ) -> LLMResponse:
     """Call an LLM via OpenRouter API.
 
@@ -42,11 +43,26 @@ async def call_llm(
         temperature: Sampling temperature
         max_tokens: Max output tokens
         response_format: "json" for JSON mode (optional)
+        api_key: Per-request OpenRouter key (e.g. supplied by the frontend).
+            Falls back to settings.openrouter_api_key for local/dev setups.
 
     Returns:
         LLMResponse with content and metadata
     """
     model = model or settings.rag_model
+    resolved_key = api_key or settings.openrouter_api_key
+
+    if not resolved_key:
+        return LLMResponse(
+            content="",
+            model=model,
+            input_tokens=0,
+            output_tokens=0,
+            latency_ms=0.0,
+            success=False,
+            error="No OpenRouter API key configured. Enter your key in the sidebar, "
+                  "or set OPENROUTER_API_KEY for a local/server-side deployment.",
+        )
 
     messages = []
     if system_prompt:
@@ -63,7 +79,7 @@ async def call_llm(
         payload["response_format"] = {"type": "json_object"}
 
     headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
+        "Authorization": f"Bearer {resolved_key}",
         "HTTP-Referer": "https://agentic-rag-cv.local",
         "X-Title": "Agentic RAG CV Matcher",
         "Content-Type": "application/json",
@@ -124,9 +140,27 @@ def call_llm_sync(
     model: str | None = None,
     temperature: float = 0.3,
     max_tokens: int = 2048,
+    api_key: str | None = None,
 ) -> LLMResponse:
-    """Synchronous version of call_llm for use in non-async contexts."""
+    """Synchronous version of call_llm for use in non-async contexts.
+
+    api_key: Per-request OpenRouter key (e.g. supplied by the frontend).
+        Falls back to settings.openrouter_api_key for local/dev setups.
+    """
     model = model or settings.rag_model
+    resolved_key = api_key or settings.openrouter_api_key
+
+    if not resolved_key:
+        return LLMResponse(
+            content="",
+            model=model,
+            input_tokens=0,
+            output_tokens=0,
+            latency_ms=0.0,
+            success=False,
+            error="No OpenRouter API key configured. Enter your key in the sidebar, "
+                  "or set OPENROUTER_API_KEY for a local/server-side deployment.",
+        )
 
     messages = []
     if system_prompt:
@@ -141,7 +175,7 @@ def call_llm_sync(
     }
 
     headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
+        "Authorization": f"Bearer {resolved_key}",
         "HTTP-Referer": "https://agentic-rag-cv.local",
         "X-Title": "Agentic RAG CV Matcher",
         "Content-Type": "application/json",

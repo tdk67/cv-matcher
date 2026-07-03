@@ -8,11 +8,17 @@ import streamlit as st
 import httpx
 import os
 import time
+import logging
+from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 # ─── Config ───────────────────────────────────────────────────────────────
 
 API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000")
 API_TIMEOUT = 120.0
+API_KEY_HEADER = "X-OpenRouter-Key"
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 st.set_page_config(
     page_title="CV Matcher",
@@ -21,32 +27,39 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── Sidebar ──────────────────────────────────────────────────────────────
-
-st.sidebar.title("🔍 CV Matcher")
-page = st.sidebar.radio(
-    "Navigate",
-    ["🏠 Home", "🔎 Query", "📄 Documents", "📊 Dashboard", "🧪 Evaluation"],
-    index=0,
-)
-
-st.sidebar.divider()
-st.sidebar.caption("Agentic RAG for CV Expertise Matching")
-st.sidebar.caption("v0.1.0")
-
 # ─── API Helpers ──────────────────────────────────────────────────────────
 
-import threading
-import logging
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+def _has_script_context() -> bool:
+    """Whether the current thread can safely call st.* / touch session_state.
+
+    Streamlit runs each session's script in its own ScriptRunner thread —
+    never the process's literal threading.main_thread() — so that's not a
+    valid check here. The background ThreadPoolExecutor threads used for
+    parallel uploads genuinely have no script context (it isn't propagated
+    to them), which is what we actually need to detect.
+    """
+    return get_script_run_ctx() is not None
+
+
+def _auth_headers() -> dict:
+    """Attach the user-supplied OpenRouter key, if any, to outgoing requests.
+
+    Only reads st.session_state when a script context is present —
+    background upload threads have none, and uploads don't need an LLM key
+    anyway (document ingestion never calls OpenRouter).
+    """
+    if not _has_script_context():
+        return {}
+    key = st.session_state.get("openrouter_api_key", "")
+    return {API_KEY_HEADER: key} if key else {}
 
 
 def api_get(path: str, **kwargs):
     """GET request to FastAPI backend."""
-    is_main_thread = (threading.current_thread() == threading.main_thread())
+    is_main_thread = _has_script_context()
     kwargs.setdefault("timeout", API_TIMEOUT)
+    kwargs["headers"] = {**_auth_headers(), **kwargs.get("headers", {})}
     try:
         resp = httpx.get(f"{API_BASE}{path}", **kwargs)
         resp.raise_for_status()
@@ -73,8 +86,9 @@ def api_get(path: str, **kwargs):
 
 def api_post(path: str, json_data=None, files=None, **kwargs):
     """POST request to FastAPI backend."""
-    is_main_thread = (threading.current_thread() == threading.main_thread())
+    is_main_thread = _has_script_context()
     kwargs.setdefault("timeout", API_TIMEOUT)
+    kwargs["headers"] = {**_auth_headers(), **kwargs.get("headers", {})}
     try:
         resp = httpx.post(
             f"{API_BASE}{path}",
@@ -114,9 +128,11 @@ def api_post(path: str, json_data=None, files=None, **kwargs):
 
 def api_delete(path: str, **kwargs):
     """DELETE request to FastAPI backend."""
-    is_main_thread = (threading.current_thread() == threading.main_thread())
+    is_main_thread = _has_script_context()
+    kwargs.setdefault("timeout", API_TIMEOUT)
+    kwargs["headers"] = {**_auth_headers(), **kwargs.get("headers", {})}
     try:
-        resp = httpx.delete(f"{API_BASE}{path}", timeout=API_TIMEOUT, **kwargs)
+        resp = httpx.delete(f"{API_BASE}{path}", **kwargs)
         resp.raise_for_status()
         return resp.json()
     except httpx.ConnectError as e:
@@ -137,6 +153,63 @@ def api_delete(path: str, **kwargs):
         if is_main_thread:
             st.error(msg)
         return None
+
+
+# ─── Sidebar ──────────────────────────────────────────────────────────────
+
+st.sidebar.title("🔍 CV Matcher")
+page = st.sidebar.radio(
+    "Navigate",
+    ["🏠 Home", "🔎 Query", "📄 Documents", "📊 Dashboard", "🧪 Evaluation"],
+    index=0,
+)
+
+st.sidebar.divider()
+st.sidebar.markdown("### 🔑 OpenRouter API Key")
+st.sidebar.caption("Sent with each request as a header; never stored server-side.")
+
+if "openrouter_api_key" not in st.session_state:
+    st.session_state.openrouter_api_key = ""
+if "key_validation" not in st.session_state:
+    st.session_state.key_validation = None
+
+
+def _on_api_key_change():
+    st.session_state.key_validation = None  # invalidate stale check on edit
+
+
+st.sidebar.text_input(
+    "API Key",
+    type="password",
+    label_visibility="collapsed",
+    placeholder="sk-or-...",
+    key="openrouter_api_key",
+    on_change=_on_api_key_change,
+)
+
+if st.sidebar.button("Validate Key", use_container_width=True):
+    if not st.session_state.openrouter_api_key:
+        st.session_state.key_validation = {"valid": False, "detail": "Enter a key first."}
+    else:
+        with st.sidebar.spinner("Checking key..."):
+            st.session_state.key_validation = api_get("/api/key/validate")
+
+validation = st.session_state.key_validation
+if validation:
+    if validation.get("valid"):
+        usage = validation.get("usage")
+        limit = validation.get("limit")
+        extra = ""
+        if usage is not None:
+            limit_str = f"${limit:.2f}" if limit is not None else "no limit"
+            extra = f" (usage ${usage:.4f} / {limit_str})"
+        st.sidebar.success(f"✅ Key is valid{extra}")
+    else:
+        st.sidebar.error(f"❌ {validation.get('detail', 'Invalid key')}")
+
+st.sidebar.divider()
+st.sidebar.caption("Agentic RAG for CV Expertise Matching")
+st.sidebar.caption("v0.1.0")
 
 
 @st.cache_data(ttl=60)

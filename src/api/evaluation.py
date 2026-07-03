@@ -13,10 +13,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from src.agents.orchestrator import run_pipeline
+from src.api.deps import get_api_key
 from src.config import settings
 from src.utils.json_store import append_to_json_list, read_json
 from src.vectorstore.store import get_vector_store
@@ -155,7 +156,7 @@ def _score_result(item: dict, ctx) -> EvalResultItem:
     )
 
 
-def _run_evaluation_job():
+def _run_evaluation_job(api_key: str | None):
     """Background-thread worker. Updates _eval_state as each question completes."""
     store = get_vector_store(persist_dir=settings.chroma_persist_dir)
     results: list[EvalResultItem] = []
@@ -166,7 +167,7 @@ def _run_evaluation_job():
 
             start = time.time()
             try:
-                ctx = run_pipeline(query=item["question"], vector_store=store)
+                ctx = run_pipeline(query=item["question"], vector_store=store, api_key=api_key)
                 result_item = _score_result(item, ctx)
             except Exception as e:
                 # One bad LLM response (truncated JSON, rate limit, timeout)
@@ -239,10 +240,10 @@ async def get_eval_results():
 
 
 @router.post("/start", response_model=EvalProgress)
-async def start_evaluation():
+async def start_evaluation(api_key: str | None = Depends(get_api_key)):
     """Kick off the evaluation suite in the background. Poll GET /progress for status."""
     if _eval_state.try_start(total=len(DEFAULT_QUESTIONS)):
-        threading.Thread(target=_run_evaluation_job, daemon=True).start()
+        threading.Thread(target=_run_evaluation_job, args=(api_key,), daemon=True).start()
     return _eval_state.snapshot()
 
 

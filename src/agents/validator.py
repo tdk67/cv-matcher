@@ -66,7 +66,7 @@ Check for hallucinations, missing citations, incorrect scores, incompleteness, a
 Return your validation as JSON."""
 
 
-def validate(ctx: PipelineContext) -> PipelineContext:
+def validate(ctx: PipelineContext, api_key: str | None = None) -> PipelineContext:
     """Run the Validator agent.
 
     Checks the Responder's answer for quality issues.
@@ -105,6 +105,7 @@ def validate(ctx: PipelineContext) -> PipelineContext:
         temperature=0.1,
         max_tokens=1024,
         model=settings.validation_model,
+        api_key=api_key,
     )
 
     if not response.success:

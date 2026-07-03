@@ -1,0 +1,32 @@
+# Local environments — never bake a developer's key into the image
+.env
+.venv/
+venv/
+
+# VCS / editor / tooling
+.git/
+.github/
+.gitattributes
+.gitignore
+.claude/
+.vscode/
+.idea/
+CLAUDE.md
+README.md
+
+# Python artifacts
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# Runtime data — recreated at container startup / mounted as a volume
+.data/
+data/
+
+# Dev-only scratch and generated sample assets (not needed at runtime)
+scratch/
+sample_data/
+chroma_sources.txt
+mojibake_results.txt
+*.log
