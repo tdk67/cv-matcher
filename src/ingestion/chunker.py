@@ -11,11 +11,23 @@ from dataclasses import dataclass
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
-from src.config import settings
-
 # Known CV section headers (all-caps, standalone lines)
+_CV_SECTION_HEADERS = [
+    "CONTACT", "PROFESSIONAL SUMMARY", "SUMMARY", "PROFILE", "OBJECTIVE",
+    "WORK EXPERIENCE", "EXPERIENCE", "EMPLOYMENT", "CAREER",
+    "EDUCATION", "ACADEMIC",
+    "TECHNICAL SKILLS", "SKILLS", "COMPETENCIES", "EXPERTISE",
+    "PROJECTS", "PORTFOLIO",
+    "CERTIFICATIONS?", "LICENSES?",
+    "LANGUAGES?",
+    "PUBLICATIONS?", "TALKS?",
+    "REFERENCES?",
+    "AWARDS?", "HONORS?",
+    "VOLUNTEER EXPERIENCE", "INTERESTS?"
+]
+
 CV_HEADER_RE = re.compile(
-    r"^(" + "|".join(settings.cv_section_headers) + r")$",
+    r"^(" + "|".join(_CV_SECTION_HEADERS) + r")$",
     re.IGNORECASE,
 )
 
@@ -30,7 +42,14 @@ class Chunk:
 
 
 # Short all-caps tokens that are NOT section headers
-_HEADER_BLOCKLIST = set(settings.header_blocklist)
+_HEADER_BLOCKLIST = {
+    "mit", "aws", "gcp", "azure", "phd", "mba", "bs", "ms", "ba", "ma",
+    "usa", "uk", "eu", "hr", "ai", "ml", "it", "pr", "qa", "devops",
+    "ci", "cd", "sql", "nosql", "rest", "grpc", "oauth", "jwt",
+    "ios", "sdk", "ide", "api", "saas", "paas", "iaas",
+    "html", "css", "sql", "php", "cobol", "dart", "vue",
+    "ceo", "cto", "cfo", "coo", "vp", "pm", "hr"
+}
 
 
 def is_cv_section_header(line: str) -> bool:

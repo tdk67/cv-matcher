@@ -4,9 +4,12 @@ Scans each chunk for prompt injection during ingestion.
 Documents with any flagged chunks are marked as tainted.
 """
 
+import logging
 from dataclasses import dataclass, field
 
 from llm_guard.input_scanners import PromptInjection
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -28,9 +31,15 @@ class DocumentScanSummary:
     chunk_results: list[ScanResult] = field(default_factory=list)
 
 
+_shared_scanner = None
+
+
 def create_scanner(threshold: float = 0.8) -> PromptInjection:
-    """Create a PromptInjection scanner with the given threshold."""
-    return PromptInjection(threshold=threshold)
+    """Create or return the shared singleton PromptInjection scanner."""
+    global _shared_scanner
+    if _shared_scanner is None:
+        _shared_scanner = PromptInjection(threshold=threshold)
+    return _shared_scanner
 
 
 def scan_chunks(
@@ -69,7 +78,10 @@ def scan_chunks(
                 injection_detected=injection_detected,
             ))
         except Exception as e:
-            # Scanner failure should not block ingestion
+            # Scanner failure should not block ingestion, but must be visible —
+            # this used to be swallowed entirely, silently treating failed
+            # scans as "clean" with no trace of why the scanner errored.
+            logger.warning(f"Prompt injection scan failed for a chunk: {str(e)}")
             results.append(ScanResult(
                 is_clean=True,
                 risk_score=0.0,

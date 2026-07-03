@@ -17,7 +17,7 @@ COLLECTION_NAME = "cv_knowledge_base"
 _shared_store_instance = None
 
 
-def get_vector_store(persist_dir: str = "./data/chromadb") -> "CVVectorStore":
+def get_vector_store(persist_dir: str = "./.data/chromadb") -> "CVVectorStore":
     """Return a shared singleton instance of CVVectorStore to prevent reloading model on every request."""
     global _shared_store_instance
     if _shared_store_instance is None:
@@ -40,7 +40,7 @@ class StoredChunk:
 class CVVectorStore:
     """ChromaDB-backed vector store for CV documents."""
 
-    def __init__(self, persist_dir: str = "./data/chromadb"):
+    def __init__(self, persist_dir: str = "./.data/chromadb"):
         self._client = chromadb.PersistentClient(
             path=persist_dir,
             settings=ChromaSettings(anonymized_telemetry=False),

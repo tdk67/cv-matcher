@@ -1,0 +1,16 @@
+{
+  "openrouter_api_key": "",
+  "rag_model": "google/gemini-3.5-flash",
+  "validation_model": "openai/gpt-4.1-nano",
+  "embedding_model": "all-MiniLM-L6-v2",
+  "app_host": "0.0.0.0",
+  "app_port": 8000,
+  "chroma_persist_dir": "./.data/chromadb",
+  "upload_dir": "./.data/uploads",
+  "max_upload_size_mb": 250,
+  "log_level": "INFO",
+  "injection_threshold": 0.8,
+  "min_match_score": 0.5,
+  "max_retry_attempts": 3,
+  "eval_file_path": ".data/evaluation/eval_results.json"
+}

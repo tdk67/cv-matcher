@@ -79,13 +79,9 @@ def plan(ctx: PipelineContext) -> PipelineContext:
         raise RuntimeError(f"Planner LLM call failed: {response.error or 'Unknown error'}")
 
     try:
-        # Parse JSON from response
+        from src.utils.json_parser import parse_json_robust
         content = response.content.strip()
-        # Handle markdown code blocks
-        if content.startswith("```"):
-            content = content.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-        result = json.loads(content)
+        result = parse_json_robust(content)
 
         ctx.query_type = result.get("query_type", "unknown")
         ctx.is_in_scope = result.get("is_in_scope", True)
@@ -95,5 +91,5 @@ def plan(ctx: PipelineContext) -> PipelineContext:
 
         return ctx
 
-    except (json.JSONDecodeError, KeyError) as e:
-        raise RuntimeError(f"Failed to parse Planner JSON response: {str(e)}. Content was: {content}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to parse Planner JSON response: {str(e)}. Content was: {response.content}")

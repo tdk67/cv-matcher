@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from src.config import settings
 from src.vectorstore.store import CVVectorStore, get_vector_store
 from src.ingestion.pipeline import ingest_upload, remove_document
+from src.utils.filenames import repair_mojibake_filename
 
 router = APIRouter()
 
@@ -74,14 +75,7 @@ def list_documents():
 @router.post("/upload", response_model=UploadResponse)
 def upload_document(file: UploadFile = File(...)):
     """Upload and ingest a document (PDF, TXT, CSV, Excel)."""
-    filename = file.filename
-    try:
-        filename = filename.encode('cp437').decode('utf-8')
-    except Exception:
-        try:
-            filename = filename.encode('cp1252').decode('utf-8')
-        except Exception:
-            pass
+    filename = repair_mojibake_filename(file.filename)
 
     allowed_formats = {".pdf", ".txt", ".csv", ".xlsx"}
     suffix = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -118,13 +112,7 @@ def upload_document(file: UploadFile = File(...)):
 @router.delete("/{filename}", response_model=RemoveResponse)
 def remove_document_endpoint(filename: str):
     """Remove a document and all its chunks from the knowledge base."""
-    try:
-        decoded_filename = filename.encode('cp437').decode('utf-8')
-    except Exception:
-        try:
-            decoded_filename = filename.encode('cp1252').decode('utf-8')
-        except Exception:
-            decoded_filename = filename
+    decoded_filename = repair_mojibake_filename(filename)
 
     store = _get_store()
     result = remove_document(decoded_filename, store)

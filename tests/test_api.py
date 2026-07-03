@@ -1,5 +1,4 @@
 """Tests for API routes."""
-import pytest
 from fastapi.testclient import TestClient
 
 from src.main import app
@@ -81,6 +80,30 @@ class TestEvaluationAPI:
         assert "runs" in data
 
     def test_run_evaluation(self):
-        resp = client.post("/api/evaluation/run")
-        # May take time, just check it doesn't crash
-        assert resp.status_code in (200, 500)
+        from src.config import settings
+        import time
+
+        key_configured = bool(settings.openrouter_api_key and settings.openrouter_api_key != "sk-or-your-key-here")
+
+        start_resp = client.post("/api/evaluation/start")
+        assert start_resp.status_code == 200
+        status = start_resp.json()["status"]
+        assert status in ("running", "done", "error")
+
+        # Poll until the background run finishes (each question can involve
+        # several live LLM calls, so this can take a while).
+        deadline = time.time() + 600
+        while status == "running" and time.time() < deadline:
+            time.sleep(2)
+            progress_resp = client.get("/api/evaluation/progress")
+            assert progress_resp.status_code == 200
+            status = progress_resp.json()["status"]
+
+        assert status in ("done", "error")
+
+        if not key_configured:
+            # Without a key, every question fails gracefully (recorded as a
+            # per-question pipeline error) instead of crashing the whole run.
+            result = client.get("/api/evaluation/progress").json().get("result")
+            if result:
+                assert result["passed"] == 0

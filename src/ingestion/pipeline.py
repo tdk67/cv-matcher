@@ -6,6 +6,7 @@ Handles file upload, format detection, text extraction, section-aware
 chunking, LLM Guard scanning, and ChromaDB storage.
 """
 
+import logging
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +16,8 @@ from src.ingestion.extractors import extract_text
 from src.ingestion.chunker import chunk_document
 from src.guardrails.scanner import scan_chunks, create_scanner
 from src.vectorstore.store import CVVectorStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -130,6 +133,7 @@ def ingest_document(
         )
 
     except Exception as e:
+        logger.exception(f"Ingestion failed for {file_path.name}: {str(e)}")
         return IngestionResult(
             success=False,
             filename=file_path.name,
@@ -154,18 +158,32 @@ def ingest_upload(
     If a document with the same name exists, removes the old one first.
     """
     upload_dir = settings.upload_path
-    upload_dir.mkdir(parents=True, exist_ok=True)
     file_path = upload_dir / filename
 
-    # Write uploaded content
-    file_path.write_bytes(file_content)
+    try:
+        upload_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check if document already exists — remove old version
-    existing_docs = vector_store.list_documents()
-    for doc in existing_docs:
-        if doc["source"] == filename:
-            vector_store.delete_by_source(filename)
-            break
+        # Write uploaded content
+        file_path.write_bytes(file_content)
+
+        # Check if document already exists — remove old version
+        existing_docs = vector_store.list_documents()
+        for doc in existing_docs:
+            if doc["source"] == filename:
+                vector_store.delete_by_source(filename)
+                break
+    except Exception as e:
+        logger.exception(f"Failed to save/prepare upload for {filename}: {str(e)}")
+        return IngestionResult(
+            success=False,
+            filename=filename,
+            doc_id="",
+            format="",
+            chunks_created=0,
+            tainted=False,
+            warnings=[],
+            error=f"Upload failed: {str(e)}",
+        )
 
     return ingest_document(file_path, vector_store, scanner)
 

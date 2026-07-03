@@ -7,6 +7,7 @@ Backend: FastAPI at http://localhost:8000
 import streamlit as st
 import httpx
 import os
+import time
 
 # ─── Config ───────────────────────────────────────────────────────────────
 
@@ -35,54 +36,106 @@ st.sidebar.caption("v0.1.0")
 
 # ─── API Helpers ──────────────────────────────────────────────────────────
 
+import threading
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
 def api_get(path: str, **kwargs):
     """GET request to FastAPI backend."""
+    is_main_thread = (threading.current_thread() == threading.main_thread())
+    kwargs.setdefault("timeout", API_TIMEOUT)
     try:
-        resp = httpx.get(f"{API_BASE}{path}", timeout=API_TIMEOUT, **kwargs)
+        resp = httpx.get(f"{API_BASE}{path}", **kwargs)
         resp.raise_for_status()
         return resp.json()
-    except httpx.ConnectError:
-        st.error(f"Cannot connect to API at {API_BASE}. Is the backend running?")
+    except httpx.ConnectError as e:
+        msg = f"Cannot connect to API at {API_BASE}. Is the backend running?"
+        logger.error(msg)
+        if is_main_thread:
+            st.error(msg)
         return None
     except httpx.HTTPStatusError as e:
-        st.error(f"API error: {e.response.status_code} — {e.response.text[:200]}")
+        msg = f"API error: {e.response.status_code} — {e.response.text[:200]}"
+        logger.error(msg)
+        if is_main_thread:
+            st.error(msg)
         return None
     except Exception as e:
-        st.error(f"Request failed: {str(e)}")
+        msg = f"Request failed: {str(e)}"
+        logger.error(msg)
+        if is_main_thread:
+            st.error(msg)
         return None
 
 
 def api_post(path: str, json_data=None, files=None, **kwargs):
     """POST request to FastAPI backend."""
+    is_main_thread = (threading.current_thread() == threading.main_thread())
+    kwargs.setdefault("timeout", API_TIMEOUT)
     try:
         resp = httpx.post(
             f"{API_BASE}{path}",
             json=json_data,
             files=files,
-            timeout=API_TIMEOUT,
             **kwargs,
         )
+        if resp.status_code in (400, 413, 422):
+            try:
+                error_data = resp.json()
+                if isinstance(error_data, dict):
+                    logger.error(f"API Error {resp.status_code} for {path}: {error_data.get('detail')}")
+                    return error_data
+            except Exception:
+                pass
         resp.raise_for_status()
         return resp.json()
-    except httpx.ConnectError:
-        st.error(f"Cannot connect to API at {API_BASE}. Is the backend running?")
+    except httpx.ConnectError as e:
+        msg = f"Cannot connect to API at {API_BASE}. Is the backend running?"
+        logger.error(msg)
+        if is_main_thread:
+            st.error(msg)
         return None
     except httpx.HTTPStatusError as e:
-        st.error(f"API error: {e.response.status_code} — {e.response.text[:200]}")
-        return None
+        msg = f"API error: {e.response.status_code} — {e.response.text[:200]}"
+        logger.error(msg)
+        if is_main_thread:
+            st.error(msg)
+        return {"detail": f"API error {e.response.status_code}: {e.response.text[:200]}"}
     except Exception as e:
-        st.error(f"Request failed: {str(e)}")
+        msg = f"Request failed: {str(e)}"
+        logger.error(msg)
+        if is_main_thread:
+            st.error(msg)
         return None
 
 
 def api_delete(path: str, **kwargs):
     """DELETE request to FastAPI backend."""
+    is_main_thread = (threading.current_thread() == threading.main_thread())
     try:
         resp = httpx.delete(f"{API_BASE}{path}", timeout=API_TIMEOUT, **kwargs)
         resp.raise_for_status()
         return resp.json()
+    except httpx.ConnectError as e:
+        msg = f"Cannot connect to API at {API_BASE}. Is the backend running?"
+        logger.error(msg)
+        if is_main_thread:
+            st.error(msg)
+        return None
+    except httpx.HTTPStatusError as e:
+        msg = f"API error: {e.response.status_code} — {e.response.text[:200]}"
+        logger.error(msg)
+        if is_main_thread:
+            st.error(msg)
+        return None
     except Exception as e:
-        st.error(f"Delete failed: {str(e)}")
+        msg = f"Delete failed: {str(e)}"
+        logger.error(msg)
+        if is_main_thread:
+            st.error(msg)
         return None
 
 
@@ -292,6 +345,7 @@ def upload_files_parallel(uploaded_files):
             )
             return file.name, res
         except Exception as e:
+            logger.error(f"Upload thread failed for {file.name}: {str(e)}")
             return file.name, None
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
@@ -315,6 +369,32 @@ def upload_files_parallel(uploaded_files):
                 
     progress_bar.empty()
     return success_count
+
+
+def render_uploader(key_prefix: str, label_visibility: str = "visible"):
+    """Render a file uploader widget wired up to upload_files_parallel.
+
+    Shared by the Home and Documents pages so accepted file types and the
+    post-upload cache/rerun handling only need to change in one place.
+    """
+    state_key = f"{key_prefix}_key"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = 0
+
+    uploaded_files = st.file_uploader(
+        "Choose files",
+        type=["pdf", "txt", "csv", "xlsx"],
+        accept_multiple_files=True,
+        label_visibility=label_visibility,
+        key=f"{key_prefix}_{st.session_state[state_key]}",
+    )
+
+    if uploaded_files:
+        success_count = upload_files_parallel(uploaded_files)
+        if success_count > 0:
+            st.session_state[state_key] += 1
+            st.cache_data.clear()
+            st.rerun()
 
 
 # ─── Page: Home ───────────────────────────────────────────────────────────
@@ -370,23 +450,7 @@ def page_home():
         st.markdown("### 📤 Upload CV Documents")
         st.markdown("Supported formats: **PDF**, **TXT**, **CSV**, **Excel (.xlsx)**")
 
-        if "home_uploader_key" not in st.session_state:
-            st.session_state.home_uploader_key = 0
-
-        uploaded_files = st.file_uploader(
-            "Choose files",
-            type=["pdf", "txt", "csv", "xlsx"],
-            accept_multiple_files=True,
-            label_visibility="collapsed",
-            key=f"home_uploader_{st.session_state.home_uploader_key}"
-        )
-
-        if uploaded_files:
-            success_count = upload_files_parallel(uploaded_files)
-            if success_count > 0:
-                st.session_state.home_uploader_key += 1
-                st.cache_data.clear()
-                st.rerun()
+        render_uploader("home_uploader", label_visibility="collapsed")
 
         # Synthetic data option
         st.markdown("---")
@@ -425,21 +489,7 @@ def page_documents():
         st.info("No documents uploaded yet. Go to **🏠 Home** to upload CVs.")
         st.markdown("---")
         st.markdown("### 📤 Upload CV Documents")
-        if "doc_uploader_key" not in st.session_state:
-            st.session_state.doc_uploader_key = 0
-
-        uploaded_files = st.file_uploader(
-            "Choose files",
-            type=["pdf", "txt", "csv", "xlsx"],
-            accept_multiple_files=True,
-            key=f"doc_uploader_{st.session_state.doc_uploader_key}",
-        )
-        if uploaded_files:
-            success_count = upload_files_parallel(uploaded_files)
-            if success_count > 0:
-                st.session_state.doc_uploader_key += 1
-                st.cache_data.clear()
-                st.rerun()
+        render_uploader("doc_uploader")
         return
 
     # Define select_all change callback to update session state values safely
@@ -504,22 +554,7 @@ def page_documents():
     # Upload more
     st.markdown("---")
     st.markdown("### 📤 Upload More Documents")
-
-    if "doc_uploader_key" not in st.session_state:
-        st.session_state.doc_uploader_key = 0
-
-    uploaded_files = st.file_uploader(
-        "Choose files",
-        type=["pdf", "txt", "csv", "xlsx"],
-        accept_multiple_files=True,
-        key=f"doc_uploader_{st.session_state.doc_uploader_key}",
-    )
-    if uploaded_files:
-        success_count = upload_files_parallel(uploaded_files)
-        if success_count > 0:
-            st.session_state.doc_uploader_key += 1
-            st.cache_data.clear()
-            st.rerun()
+    render_uploader("doc_uploader")
 
 
 # ─── Page: Dashboard ──────────────────────────────────────────────────────
@@ -604,18 +639,59 @@ def page_dashboard():
 
 # ─── Page: Evaluation ─────────────────────────────────────────────────────
 
+def _poll_evaluation_progress():
+    """Poll GET /api/evaluation/progress until the background run finishes,
+    rendering a live progress bar instead of blocking on one long request."""
+    progress_bar = st.progress(0, text="Starting evaluation...")
+    status = "running"
+    progress = {}
+
+    while status == "running":
+        progress = api_get("/api/evaluation/progress")
+        if progress is None:
+            progress_bar.empty()
+            st.error("Lost connection while polling evaluation progress.")
+            return
+        status = progress.get("status", "error")
+        completed = progress.get("completed", 0)
+        total = progress.get("total", 0) or 1
+        current_question = progress.get("current_question") or ""
+
+        label = f"Evaluating... {completed}/{total}"
+        if current_question:
+            label += f" — {current_question[:60]}"
+        progress_bar.progress(min(completed / total, 1.0), text=label)
+
+        if status == "running":
+            time.sleep(1.5)
+
+    progress_bar.empty()
+    if status == "done":
+        result = progress.get("result") or {}
+        st.success(f"Completed: {result.get('passed', 0)}/{result.get('total_questions', 0)} passed")
+    else:
+        st.error(f"Evaluation failed: {progress.get('error') or 'unknown error'}")
+
+
 def page_evaluation():
     st.title("🧪 Evaluation")
 
     col1, col2 = st.columns([1, 3])
     with col1:
-        if st.button("▶️ Run Evaluation", type="primary"):
-            with st.spinner("Running evaluation suite..."):
-                result = api_post("/api/evaluation/run")
-            if result:
-                st.success(f"Completed: {result.get('passed', 0)}/{result.get('total_questions', 0)} passed")
-            else:
-                st.error("Evaluation failed")
+        run_clicked = st.button("▶️ Run Evaluation", type="primary")
+
+    # Check for an in-flight run (covers both a fresh click and a page reload
+    # while a previously started run is still going).
+    current_progress = api_get("/api/evaluation/progress")
+    already_running = bool(current_progress and current_progress.get("status") == "running")
+
+    if run_clicked and not already_running:
+        api_post("/api/evaluation/start")
+        already_running = True
+
+    if already_running:
+        _poll_evaluation_progress()
+        st.cache_data.clear()
 
     # Load existing results
     eval_data = api_get("/api/evaluation/results")

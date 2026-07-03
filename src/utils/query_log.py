@@ -3,12 +3,13 @@
 Simple JSON file-backed query log for dashboard statistics.
 """
 
-import json
-from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, asdict
 
-LOG_FILE = Path("data/query_log.json")
+from src.utils.json_store import append_to_json_list, read_json
+
+LOG_FILE = Path(".data/query_log.json")
+MAX_LOG_ENTRIES = 1000
 
 
 @dataclass
@@ -25,33 +26,12 @@ class QueryLogEntry:
 
 def log_query(entry: QueryLogEntry) -> None:
     """Append a query entry to the log."""
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    existing = []
-    if LOG_FILE.exists():
-        try:
-            existing = json.loads(LOG_FILE.read_text())
-        except (json.JSONDecodeError, ValueError):
-            existing = []
-
-    existing.append(asdict(entry))
-
-    # Keep last 1000 entries
-    if len(existing) > 1000:
-        existing = existing[-1000:]
-
-    LOG_FILE.write_text(json.dumps(existing, indent=2, default=str))
+    append_to_json_list(LOG_FILE, asdict(entry), max_entries=MAX_LOG_ENTRIES)
 
 
 def get_query_stats() -> dict:
     """Get aggregated query statistics."""
-    if not LOG_FILE.exists():
-        return {"total_queries": 0, "avg_match_score": 0.0, "avg_latency_ms": 0.0}
-
-    try:
-        entries = json.loads(LOG_FILE.read_text())
-    except (json.JSONDecodeError, ValueError):
-        return {"total_queries": 0, "avg_match_score": 0.0, "avg_latency_ms": 0.0}
+    entries = read_json(LOG_FILE, default=[])
 
     if not entries:
         return {"total_queries": 0, "avg_match_score": 0.0, "avg_latency_ms": 0.0}

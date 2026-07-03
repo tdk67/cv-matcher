@@ -79,9 +79,9 @@ source venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 
 # 4. Configure environment
-cp .env.example .env
-# Edit .env and set your OpenRouter API key:
-# OPENROUTER_API_KEY=sk-or-your-key-here
+# Edit config.json to change model defaults or application settings.
+# Create a .env file and set your OpenRouter API key secret:
+echo "OPENROUTER_API_KEY=your_key_here" > .env
 
 # 5. Generate sample data (optional, for testing)
 python -m src.data.cli --count 20 --output ./sample_data
@@ -138,8 +138,9 @@ curl http://localhost:8000/api/documents/
 # Dashboard stats
 curl http://localhost:8000/api/dashboard/stats
 
-# Run evaluation
-curl -X POST http://localhost:8000/api/evaluation/run
+# Start evaluation (runs in the background; poll /progress for status)
+curl -X POST http://localhost:8000/api/evaluation/start
+curl http://localhost:8000/api/evaluation/progress
 ```
 
 ## Libraries Used
@@ -165,12 +166,13 @@ curl -X POST http://localhost:8000/api/evaluation/run
 ```
 agentic-rag-cv/
 ├── app.py                      # Streamlit frontend (5 pages)
-├── requirements.txt            # Python dependencies
-├── .env.example                # Environment configuration template
+├── requirements.txt            # Python dependencies (added pyyaml)
+├── config.json                 # Global configuration defaults
+├── .env.example                # Template for OPENROUTER_API_KEY secret
 ├── README.md                   # This file
 ├── run.sh                      # Convenience run script
 ├── src/
-│   ├── config.py               # Pydantic Settings (all config from .env)
+│   ├── config.py               # Settings loader (merges config.json + .env)
 │   ├── main.py                 # FastAPI app with route registration
 │   ├── api/                    # API route handlers
 │   │   ├── documents.py        # Upload, list, remove documents
@@ -188,19 +190,24 @@ agentic-rag-cv/
 │   │   └── orchestrator.py     # Pipeline orchestration + retry loop
 │   ├── ingestion/              # Document processing
 │   │   ├── extractors.py       # PDF/TXT/CSV/Excel text extraction
-│   │   ├── chunker.py          # Section-aware chunking
+│   │   ├── chunker.py          # Section-aware chunking (with localized headers)
 │   │   └── pipeline.py         # Extract → Chunk → Scan → Store
 │   ├── vectorstore/
 │   │   └── store.py            # ChromaDB wrapper (add, query, delete, list)
 │   ├── guardrails/
 │   │   └── scanner.py          # LLM Guard wrapper
 │   ├── data/                   # Synthetic data generator
-│   │   ├── personas.py         # 20 persona templates (8 role categories)
+│   │   ├── resources/
+│   │   │   └── generator_data.yaml # Persona templates, pools, and text generation assets
+│   │   ├── personas.py         # Load generator pool & template personas
 │   │   ├── generator.py        # PDF/TXT/CV renderer
 │   │   └── cli.py              # CLI entry point
 │   └── utils/
-│       └── query_log.py        # Query statistics tracking
-├── tests/                      # pytest test suite (55 tests)
+│       ├── query_log.py        # Query statistics tracking
+│       └── json_parser.py      # Robust JSON cleaner and parser
+├── tests/                      # pytest test suite (54 tests)
+│   ├── resources/
+│   │   └── default_questions.json # Evaluation question dataset (test-local resource)
 │   ├── test_extractors.py      # Document extraction tests
 │   ├── test_chunker.py         # Section-aware chunking tests
 │   ├── test_guardrails.py      # Prompt injection detection tests

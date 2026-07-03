@@ -106,8 +106,7 @@ def respond(ctx: PipelineContext) -> PipelineContext:
         retry_instruction=retry_instruction,
     )
 
-    # Call LLM
-    # Use settings.validation_model instead of hardcoded if desired, but respond runs onsettings.rag_model
+    # Call LLM (uses settings.rag_model — Validator uses settings.validation_model)
     response = call_llm_sync(
         prompt=user_prompt,
         system_prompt=RESPONDER_SYSTEM_PROMPT,
@@ -118,18 +117,15 @@ def respond(ctx: PipelineContext) -> PipelineContext:
     if not response.success:
         raise RuntimeError(f"Responder LLM call failed: {response.error or 'Unknown error'}")
 
-    # Parse response
     try:
+        from src.utils.json_parser import parse_json_robust
         content = response.content.strip()
-        if content.startswith("```"):
-            content = content.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-        result = json.loads(content)
+        result = parse_json_robust(content)
         ctx.answer = result.get("answer", "")
         ctx.match_candidates = []  # Will be populated from matches
         ctx.citations = result.get("matches", [])[:3]  # Strictly limit to top 3 matches
 
-    except (json.JSONDecodeError, KeyError) as e:
-        raise RuntimeError(f"Failed to parse Responder JSON response: {str(e)}. Content was: {content}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to parse Responder JSON response: {str(e)}. Content was: {response.content}")
 
     return ctx

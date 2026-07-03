@@ -11,6 +11,7 @@ import json
 
 from src.agents.context import PipelineContext
 from src.agents.llm_client import call_llm_sync
+from src.config import settings
 
 VALIDATOR_SYSTEM_PROMPT = """You are the Validator agent in an Agentic RAG system for CV expertise matching.
 
@@ -103,24 +104,21 @@ def validate(ctx: PipelineContext) -> PipelineContext:
         system_prompt=VALIDATOR_SYSTEM_PROMPT,
         temperature=0.1,
         max_tokens=1024,
-        model=None,  # Use validation model from config
+        model=settings.validation_model,
     )
 
     if not response.success:
         raise RuntimeError(f"Validator LLM call failed: {response.error or 'Unknown error'}")
 
-    # Parse response
     try:
+        from src.utils.json_parser import parse_json_robust
         content = response.content.strip()
-        if content.startswith("```"):
-            content = content.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-        result = json.loads(content)
+        result = parse_json_robust(content)
         ctx.validation_passed = result.get("passed", True)
         ctx.validation_feedback = result.get("suggested_fix", "")
         ctx.validation_failure_type = result.get("failure_type", "none")
 
-    except (json.JSONDecodeError, KeyError) as e:
-        raise RuntimeError(f"Failed to parse Validator JSON response: {str(e)}. Content was: {content}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to parse Validator JSON response: {str(e)}. Content was: {response.content}")
 
     return ctx
