@@ -84,9 +84,10 @@ docker run -p 8501:8501 -p 8000:8000 \
 - The `-v cvmatcher_data:/app/.data` volume persists the ChromaDB knowledge base, uploads, evaluation history, and logs across container restarts — omit it for a fully ephemeral deployment.
 - Do **not** set `OPENROUTER_API_KEY` in the container's environment for a public deployment — see [API Key Handling](#api-key-handling) above.
 
+
 ### Where to host it
 
-This app needs two long-running processes (not short-lived serverless functions), local disk for ChromaDB persistence, and a sizeable image (torch + tensorflow + sentence-transformers push it into the multi-GB range). That combination rules out **Vercel** — it's built for serverless functions and static/Next.js sites with short execution limits and no persistent local disk, not long-lived Docker services with WebSocket connections (which is how Streamlit works).
+This app still needs two long-running processes (not short-lived serverless functions) and local disk for ChromaDB persistence. That combination rules out **Vercel** — it's built for serverless functions and static/Next.js sites with short execution limits and no persistent local disk, not long-lived Docker services with WebSocket connections (which is how Streamlit works).
 
 Better fits for this Dockerfile:
 - **Railway / Render / Fly.io** — straightforward Docker deploys with persistent volumes and generous-enough free/hobby tiers. Probably the least friction.

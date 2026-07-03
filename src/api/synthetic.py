@@ -1,9 +1,9 @@
 """Synthetic data API — generate sample CVs on demand."""
 
+from pathlib import Path
+
 from fastapi import APIRouter
 from pydantic import BaseModel
-
-from src.config import settings
 
 router = APIRouter()
 
@@ -29,7 +29,10 @@ def generate_synthetic_data(request: GenerateRequest):
     import subprocess
     import sys
 
-    output_dir = str(settings.upload_dir.parent / "sample_data")
+    # No cwd override: inherit the server process's own working directory
+    # (always the project root, same assumption every other relative path
+    # in this app relies on) so `-m src.data.cli` resolves correctly.
+    output_dir = str(Path("sample_data").resolve())
 
     result = subprocess.run(
         [
@@ -40,7 +43,6 @@ def generate_synthetic_data(request: GenerateRequest):
         ],
         capture_output=True,
         text=True,
-        cwd=str(settings.upload_dir.parent),
     )
 
     if result.returncode != 0:
@@ -54,7 +56,6 @@ def generate_synthetic_data(request: GenerateRequest):
             message=f"Generation failed: {result.stderr[:500]}",
         )
 
-    from pathlib import Path
     out = Path(output_dir)
     pdf_count = len(list((out / "pdf").glob("*.pdf"))) if (out / "pdf").exists() else 0
     txt_count = len(list((out / "txt").glob("*.txt"))) if (out / "txt").exists() else 0
