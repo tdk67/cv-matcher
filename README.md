@@ -10,7 +10,7 @@ When hiring or staffing a project, managers need to quickly identify which peopl
 
 ## Features
 
-- **Agentic RAG pipeline**: 4-agent architecture (Planner → Retriever → Responder → Validator) with retry loop
+- **Agentic RAG pipeline**: 4-agent architecture (Planner -> Retriever -> Responder -> Validator) with retry loop
 - **Multi-format ingestion**: PDF, TXT, CSV, Excel (.xlsx)
 - **Section-aware chunking**: Splits CVs on semantic sections (Experience, Skills, Education) for cleaner retrieval
 - **Similarity search**: ChromaDB vector store with cosine similarity ranking
@@ -19,24 +19,29 @@ When hiring or staffing a project, managers need to quickly identify which peopl
 - **QA retry loop**: Validator checks answer quality; if rejected, Responder retries with feedback (max 3 attempts)
 - **Dashboard**: Ingestion stats, query performance, evaluation results
 - **Synthetic data generator**: 20 diverse personas across 8 role categories
-- **Bring-your-own API key**: Enter an OpenRouter key in the frontend sidebar; it's sent per-request as a header and never stored server-side — lets you run a public deployment without baking your own key into it
+- **Bring-your-own API key**: Enter an OpenRouter key in the frontend sidebar; it's sent per-request as a header and never stored server-side - lets you run a public deployment without baking your own key into it
 
 ## Architecture
 
 ```
-User → Streamlit Frontend (app.py) → FastAPI Backend (src/main.py)
-                                            ↓
+User -> Streamlit Frontend (app.py) -> FastAPI Backend (src/main.py)
+                                            |
+                                            v
                                     Agentic Pipeline (src/agents/orchestrator.py)
-                                            ↓
-                              ┌──────────────┼──────────────┐
-                              ↓              ↓              ↓
+                                            |
+                                            v
+                              +--------------+--------------+
+                              |              |              |
+                              v              v              v
                            Planner       Retriever      Validator
                        (classify +    (ChromaDB       (quality
                         extract)       similarity)     check)
-                              ↓              ↓              ↓
+                              |              |              |
+                              v              v              v
                           LLM Client    VectorStore    LLM Client
                        (OpenRouter)   (all-MiniLM)   (OpenRouter)
-                                              ↓
+                                             |
+                                             v
                                          Responder
                                       (answer + citations)
 ```
@@ -64,9 +69,9 @@ All OpenRouter calls (Planner, Responder, Validator) accept a per-request key:
 1. The frontend sends the key entered in the sidebar as an `X-OpenRouter-Key` header on every request.
 2. The backend uses that header's key if present; otherwise it falls back to `OPENROUTER_API_KEY` from `.env` / `config.json` (convenient for local dev).
 3. **Neither the frontend nor the backend ever writes the key to disk or logs it.**
-4. `GET /api/key/validate` (sidebar "Validate Key" button) checks the key against OpenRouter's own `/api/v1/auth/key` endpoint — free, doesn't consume completion credits, and reports usage/limit if valid.
+4. `GET /api/key/validate` (sidebar "Validate Key" button) checks the key against OpenRouter's own `/api/v1/auth/key` endpoint - free, doesn't consume completion credits, and reports usage/limit if valid.
 
-For a public deployment where you don't want your own key exposed or spent by strangers, leave `OPENROUTER_API_KEY` unset in the deployment environment — every visitor must then supply their own key to use Query or Evaluation (document upload doesn't need a key at all; ingestion never calls an LLM).
+For a public deployment where you don't want your own key exposed or spent by strangers, leave `OPENROUTER_API_KEY` unset in the deployment environment - every visitor must then supply their own key to use Query or Evaluation (document upload doesn't need a key at all; ingestion never calls an LLM).
 
 ## Deployment
 
@@ -81,18 +86,18 @@ docker run -p 8501:8501 -p 8000:8000 \
 ```
 
 - Open the app at `http://localhost:8501`.
-- The `-v cvmatcher_data:/app/.data` volume persists the ChromaDB knowledge base, uploads, evaluation history, and logs across container restarts — omit it for a fully ephemeral deployment.
-- Do **not** set `OPENROUTER_API_KEY` in the container's environment for a public deployment — see [API Key Handling](#api-key-handling) above.
+- The `-v cvmatcher_data:/app/.data` volume persists the ChromaDB knowledge base, uploads, evaluation history, and logs across container restarts - omit it for a fully ephemeral deployment.
+- Do **not** set `OPENROUTER_API_KEY` in the container's environment for a public deployment - see [API Key Handling](#api-key-handling) above.
 
 
 ### Where to host it
 
-This app still needs two long-running processes (not short-lived serverless functions) and local disk for ChromaDB persistence. That combination rules out **Vercel** — it's built for serverless functions and static/Next.js sites with short execution limits and no persistent local disk, not long-lived Docker services with WebSocket connections (which is how Streamlit works).
+This app still needs two long-running processes (not short-lived serverless functions) and local disk for ChromaDB persistence. That combination rules out **Vercel** - it's built for serverless functions and static/Next.js sites with short execution limits and no persistent local disk, not long-lived Docker services with WebSocket connections (which is how Streamlit works).
 
 Better fits for this Dockerfile:
-- **Railway / Render / Fly.io** — straightforward Docker deploys with persistent volumes and generous-enough free/hobby tiers. Probably the least friction.
-- **A plain VM** (DigitalOcean, Hetzner, EC2) running `docker run` directly — full control, disk persists by default, no serverless constraints.
-- **Google Cloud Run** — works, but only exposes one public port per service and has an ephemeral filesystem by default. Since only the Streamlit frontend needs to be internet-facing (it calls FastAPI over `localhost` inside the same container), you can deploy the container as-is exposing port 8501 only; add a mounted volume (or accept that the knowledge base resets on redeploy/scale-to-zero) for persistence.
+- **Railway / Render / Fly.io** - straightforward Docker deploys with persistent volumes and generous-enough free/hobby tiers. Probably the least friction.
+- **A plain VM** (DigitalOcean, Hetzner, EC2) running `docker run` directly - full control, disk persists by default, no serverless constraints.
+- **Google Cloud Run** - works, but only exposes one public port per service and has an ephemeral filesystem by default. Since only the Streamlit frontend needs to be internet-facing (it calls FastAPI over `localhost` inside the same container), you can deploy the container as-is exposing port 8501 only; add a mounted volume (or accept that the knowledge base resets on redeploy/scale-to-zero) for persistence.
 
 ## Installation
 
@@ -141,11 +146,11 @@ The app is now running:
 ### Web Interface
 
 1. Open http://localhost:8501
-2. Go to **Home** → Upload CV files (PDF/TXT/CSV/Excel)
-3. Go to **Query** → Ask questions like "Find a Java developer with Spring Boot experience"
+2. Go to **Home** -> Upload CV files (PDF/TXT/CSV/Excel)
+3. Go to **Query** -> Ask questions like "Find a Java developer with Spring Boot experience"
 4. View match scores, citations, and evidence
 
-### CLI — Synthetic Data Generator
+### CLI - Synthetic Data Generator
 
 ```bash
 # Generate 20 sample CVs
@@ -207,70 +212,70 @@ curl http://localhost:8000/api/evaluation/progress
 
 ```
 agentic-rag-cv/
-├── app.py                      # Streamlit frontend (5 pages)
-├── requirements.txt            # Python dependencies (added pyyaml)
-├── config.json                 # Global configuration defaults
-├── .env.example                # Template for OPENROUTER_API_KEY secret
-├── README.md                   # This file
-├── run.sh                      # Convenience run script (local dev)
-├── Dockerfile                  # Backend + frontend packaged into one container
-├── docker-entrypoint.sh        # Starts backend, waits for health, then starts frontend
-├── .dockerignore
-├── src/
-│   ├── config.py               # Settings loader (merges config.json + .env)
-│   ├── main.py                 # FastAPI app with route registration
-│   ├── api/                    # API route handlers
-│   │   ├── deps.py             # Shared dependencies (per-request OpenRouter key extraction)
-│   │   ├── apikey.py           # GET /validate — checks a key against OpenRouter, no server-side storage
-│   │   ├── documents.py        # Upload, list, remove documents
-│   │   ├── query.py            # Query knowledge base
-│   │   ├── dashboard.py        # Dashboard statistics
-│   │   ├── evaluation.py       # Background evaluation run + progress polling
-│   │   └── synthetic.py        # Generate sample data
-│   ├── agents/                 # Agentic RAG pipeline
-│   │   ├── context.py          # PipelineContext dataclass
-│   │   ├── llm_client.py       # OpenRouter API wrapper
-│   │   ├── planner.py          # Query classification + scope detection
-│   │   ├── retriever.py        # ChromaDB similarity search + ranking
-│   │   ├── responder.py        # Answer generation with citations
-│   │   ├── validator.py        # Output quality validation
-│   │   └── orchestrator.py     # Pipeline orchestration + retry loop
-│   ├── ingestion/              # Document processing
-│   │   ├── extractors.py       # PDF/TXT/CSV/Excel text extraction
-│   │   ├── chunker.py          # Section-aware chunking (with localized headers)
-│   │   └── pipeline.py         # Extract → Chunk → Scan → Store
-│   ├── vectorstore/
-│   │   └── store.py            # ChromaDB wrapper (add, query, delete, list)
-│   ├── guardrails/
-│   │   └── scanner.py          # LLM Guard wrapper
-│   ├── data/                   # Synthetic data generator
-│   │   ├── resources/
-│   │   │   └── generator_data.yaml # Persona templates, pools, and text generation assets
-│   │   ├── personas.py         # Load generator pool & template personas
-│   │   ├── generator.py        # PDF/TXT/CV renderer
-│   │   └── cli.py              # CLI entry point
-│   └── utils/
-│       ├── query_log.py        # Query statistics tracking
-│       ├── json_parser.py      # Robust JSON cleaner and parser
-│       ├── json_store.py       # Shared read/append helpers for JSON-file-backed storage
-│       └── filenames.py        # Mojibake filename repair (shared across upload/query/delete)
-├── tests/                      # pytest test suite (54 tests)
-│   ├── resources/
-│   │   └── default_questions.json # Evaluation question dataset (test-local resource)
-│   ├── test_extractors.py      # Document extraction tests
-│   ├── test_chunker.py         # Section-aware chunking tests
-│   ├── test_guardrails.py      # Prompt injection detection tests
-│   ├── test_pipeline.py        # Agent pipeline integration tests
-│   └── test_api.py             # API route tests
-├── sample_data/                # Generated synthetic CVs
-│   ├── pdf/                    # 20 PDF CVs
-│   ├── txt/                    # 20 TXT CVs
-│   └── personas.csv            # All personas in CSV
-└── data/                       # Runtime data (gitignored)
-    ├── chromadb/               # Vector store persistence
-    ├── uploads/                # Uploaded documents
-    ├── evaluation/             # Evaluation results (eval_results.json)
-    └── query_log.json          # Query statistics
+|-- app.py                      # Streamlit frontend (5 pages)
+|-- requirements.txt            # Python dependencies (added pyyaml)
+|-- config.json                 # Global configuration defaults
+|-- .env.example                # Template for OPENROUTER_API_KEY secret
+|-- README.md                   # This file
+|-- run.sh                      # Convenience run script (local dev)
+|-- Dockerfile                  # Backend + frontend packaged into one container
+|-- docker-entrypoint.sh        # Starts backend, waits for health, then starts frontend
+|-- .dockerignore
+|-- src/
+|   |-- config.py               # Settings loader (merges config.json + .env)
+|   |-- main.py                 # FastAPI app with route registration
+|   |-- api/                    # API route handlers
+|   |   |-- deps.py             # Shared dependencies (per-request OpenRouter key extraction)
+|   |   |-- apikey.py           # GET /validate - checks a key against OpenRouter, no server-side storage
+|   |   |-- documents.py        # Upload, list, remove documents
+|   |   |-- query.py            # Query knowledge base
+|   |   |-- dashboard.py        # Dashboard statistics
+|   |   |-- evaluation.py       # Background evaluation run + progress polling
+|   |   +-- synthetic.py        # Generate sample data
+|   |-- agents/                 # Agentic RAG pipeline
+|   |   |-- context.py          # PipelineContext dataclass
+|   |   |-- llm_client.py       # OpenRouter API wrapper
+|   |   |-- planner.py          # Query classification + scope detection
+|   |   |-- retriever.py        # ChromaDB similarity search + ranking
+|   |   |-- responder.py        # Answer generation with citations
+|   |   |-- validator.py        # Output quality validation
+|   |   +-- orchestrator.py     # Pipeline orchestration + retry loop
+|   |-- ingestion/              # Document processing
+|   |   |-- extractors.py       # PDF/TXT/CSV/Excel text extraction
+|   |   |-- chunker.py          # Section-aware chunking (with localized headers)
+|   |   +-- pipeline.py         # Extract -> Chunk -> Scan -> Store
+|   |-- vectorstore/
+|   |   +-- store.py            # ChromaDB wrapper (add, query, delete, list)
+|   |-- guardrails/
+|   |   +-- scanner.py          # LLM Guard wrapper
+|   |-- data/                   # Synthetic data generator
+|   |   |-- resources/
+|   |   |   +-- generator_data.yaml # Persona templates, pools, and text generation assets
+|   |   |-- personas.py         # Load generator pool & template personas
+|   |   |-- generator.py        # PDF/TXT/CV renderer
+|   |   +-- cli.py              # CLI entry point
+|   +-- utils/
+|       |-- query_log.py        # Query statistics tracking
+|       |-- json_parser.py      # Robust JSON cleaner and parser
+|       |-- json_store.py       # Thread-safe read/append helpers for JSON-file-backed storage (using RLock)
+|       +-- filenames.py        # Mojibake filename repair (shared across upload/query/delete)
+|-- tests/                      # pytest test suite (38 tests)
+|   |-- resources/
+|   |   +-- default_questions.json # Evaluation question dataset (test-local resource)
+|   |-- test_extractors.py      # Document extraction tests
+|   |-- test_chunker.py         # Section-aware chunking tests
+|   |-- test_guardrails.py      # Prompt injection detection tests
+|   |-- test_pipeline.py        # Agent pipeline integration tests
+|   +-- test_api.py             # API route tests
+|-- sample_data/                # Generated synthetic CVs
+|   |-- pdf/                    # 20 PDF CVs
+|   |-- txt/                    # 20 TXT CVs
+|   +-- personas.csv            # All personas in CSV
++-- data/                       # Runtime data (gitignored)
+    |-- chromadb/               # Vector store persistence
+    |-- uploads/                # Uploaded documents
+    |-- evaluation/             # Evaluation results (eval_results.json)
+    +-- query_log.json          # Query statistics
 ```
 
 ## Limitations and Challenges
@@ -283,9 +288,9 @@ agentic-rag-cv/
 
 4. **Similarity scores**: Scores from all-MiniLM-L6-v2 are relatively low (0.3-0.5 range). The ranking is correct; the absolute values are not comparable across embedding models.
 
-5. **No persistence of query history**: Query log is JSON-file-backed. Not suitable for high-volume production use.
+5. **No persistence of query history**: Query log is JSON-file-backed. Although thread-safety locks have been implemented to prevent concurrent write corruptions, it is not suitable for high-volume production use.
 
-6. **Shared knowledge base, no auth**: Each visitor can bring their own OpenRouter key (see API Key Handling), but the uploaded CVs and ChromaDB knowledge base are global — anyone who can reach a public deployment can see, query, and delete the same documents. Fine for a personal demo behind an unlisted URL; not a substitute for real multi-tenancy or access control.
+6. **Shared knowledge base, no auth**: Each visitor can bring their own OpenRouter key (see API Key Handling), but the uploaded CVs and ChromaDB knowledge base are global - anyone who can reach a public deployment can see, query, and delete the same documents. Fine for a personal demo behind an unlisted URL; not a substitute for real multi-tenancy or access control.
 
 ## Testing
 
@@ -310,7 +315,7 @@ python -m pytest tests/ --cov=src --cov-report=term-missing
 | 4 | Semantic search prep | Recursive + section-aware chunking with metadata |
 | 5 | Vector knowledge store | ChromaDB + all-MiniLM-L6-v2 embeddings |
 | 6 | Intelligent retrieval | Similarity search with ranking + deduplication |
-| 7 | RAG pipeline | Retrieve → LLM generates grounded, cited answer |
+| 7 | RAG pipeline | Retrieve -> LLM generates grounded, cited answer |
 | 8 | Agent-based reasoning | 4-agent architecture with retry loop |
 | 9 | Safety controls | LLM Guard injection defense + scope rejection + output validation |
 | 10 | Deploy + document | FastAPI + Streamlit deployment, this README |

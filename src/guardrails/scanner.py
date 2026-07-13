@@ -78,7 +78,7 @@ def scan_chunks(
                 injection_detected=injection_detected,
             ))
         except Exception as e:
-            # Scanner failure should not block ingestion, but must be visible —
+            # Scanner failure should not block ingestion, but must be visible -
             # this used to be swallowed entirely, silently treating failed
             # scans as "clean" with no trace of why the scanner errored.
             logger.warning(f"Prompt injection scan failed for a chunk: {str(e)}")

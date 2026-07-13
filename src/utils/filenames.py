@@ -2,8 +2,8 @@
 
 Uploaded filenames sometimes arrive mis-decoded as cp437/cp1252 bytes
 reinterpreted as UTF-8 (a multipart/form-data client-encoding quirk),
-producing mojibake like "bela_m╦╗ller_cv.pdf" instead of
-"bela_müller_cv.pdf". This repairs that in one place instead of the
+producing mojibake like "bela_m[mojibake]_ller_cv.pdf" instead of
+"bela_muller_cv.pdf" (originally containing u-umlaut). This repairs that in one place instead of the
 same try/except chain being copy-pasted at every call site.
 """
 

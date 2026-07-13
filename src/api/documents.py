@@ -1,5 +1,6 @@
-"""Document management API — upload, list, remove documents."""
+"""Document management API - upload, list, remove documents."""
 
+from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 
@@ -75,7 +76,7 @@ def list_documents():
 @router.post("/upload", response_model=UploadResponse)
 def upload_document(file: UploadFile = File(...)):
     """Upload and ingest a document (PDF, TXT, CSV, Excel)."""
-    filename = repair_mojibake_filename(file.filename)
+    filename = Path(repair_mojibake_filename(file.filename)).name
 
     allowed_formats = {".pdf", ".txt", ".csv", ".xlsx"}
     suffix = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -112,7 +113,9 @@ def upload_document(file: UploadFile = File(...)):
 @router.delete("/{filename}", response_model=RemoveResponse)
 def remove_document_endpoint(filename: str):
     """Remove a document and all its chunks from the knowledge base."""
-    decoded_filename = repair_mojibake_filename(filename)
+    # Sanitize to prevent path traversal
+    safe_filename = Path(filename).name
+    decoded_filename = repair_mojibake_filename(safe_filename)
 
     store = _get_store()
     result = remove_document(decoded_filename, store)
@@ -127,14 +130,20 @@ def remove_document_endpoint(filename: str):
 @router.get("/{filename}/content")
 def get_document_content(filename: str):
     """Retrieve full text content of a document by filename."""
-    file_path = settings.upload_path / filename
+    # Sanitize filename and enforce path containment
+    safe_filename = Path(filename).name
+    upload_dir = settings.upload_path.resolve()
+    file_path = (upload_dir / safe_filename).resolve()
+
+    if not file_path.is_relative_to(upload_dir):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     if not file_path.exists():
         raise HTTPException(status_code=404, detail=f"Document file not found: {filename}")
 
     try:
         from src.ingestion.extractors import extract_text
-        from pathlib import Path
-        res = extract_text(Path(file_path))
-        return {"filename": filename, "text": res["text"]}
+        res = extract_text(file_path)
+        return {"filename": safe_filename, "text": res["text"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read document: {str(e)}")

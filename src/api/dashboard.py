@@ -1,4 +1,4 @@
-"""Dashboard API — stats for the Streamlit frontend."""
+"""Dashboard API - stats for the Streamlit frontend."""
 
 from fastapi import APIRouter
 from pydantic import BaseModel

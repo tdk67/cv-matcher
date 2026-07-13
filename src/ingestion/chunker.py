@@ -67,7 +67,7 @@ def is_cv_section_header(line: str) -> bool:
     # Match known patterns
     if CV_HEADER_RE.match(stripped):
         return True
-    # Heuristic: all-caps, short, standalone — but reject if single word + blocklisted
+    # Heuristic: all-caps, short, standalone - but reject if single word + blocklisted
     if stripped.isupper() and len(stripped.split()) <= 4 and len(stripped) <= 30:
         # Single all-caps words need to be in the header patterns or long enough
         if len(stripped.split()) == 1 and len(stripped) <= 4:

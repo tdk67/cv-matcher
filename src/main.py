@@ -1,4 +1,4 @@
-"""Agentic RAG CV Matcher — FastAPI Backend."""
+"""Agentic RAG CV Matcher - FastAPI Backend."""
 
 import logging
 from contextlib import asynccontextmanager

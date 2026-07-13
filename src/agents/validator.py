@@ -1,4 +1,4 @@
-"""Validator Agent — checks answer quality and provides feedback for retry.
+"""Validator Agent - checks answer quality and provides feedback for retry.
 
 Responsibilities:
 - Verify answer is grounded in retrieved context

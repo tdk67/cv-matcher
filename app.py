@@ -1,4 +1,4 @@
-"""Agentic RAG CV Matcher — Streamlit Frontend.
+"""Agentic RAG CV Matcher - Streamlit Frontend.
 
 Pages: Home, Query, Documents, Dashboard, Evaluation
 Backend: FastAPI at http://localhost:8000
@@ -11,7 +11,7 @@ import time
 import logging
 from streamlit.runtime.scriptrunner import get_script_run_ctx
 
-# ─── Config ───────────────────────────────────────────────────────────────
+# --- Config ---------------------------------------------------------------
 
 API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000")
 API_TIMEOUT = 120.0
@@ -27,14 +27,14 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── API Helpers ──────────────────────────────────────────────────────────
+# --- API Helpers ----------------------------------------------------------
 
 
 def _has_script_context() -> bool:
     """Whether the current thread can safely call st.* / touch session_state.
 
-    Streamlit runs each session's script in its own ScriptRunner thread —
-    never the process's literal threading.main_thread() — so that's not a
+    Streamlit runs each session's script in its own ScriptRunner thread --
+    never the process's literal threading.main_thread() -- so that's not a
     valid check here. The background ThreadPoolExecutor threads used for
     parallel uploads genuinely have no script context (it isn't propagated
     to them), which is what we actually need to detect.
@@ -45,7 +45,7 @@ def _has_script_context() -> bool:
 def _auth_headers() -> dict:
     """Attach the user-supplied OpenRouter key, if any, to outgoing requests.
 
-    Only reads st.session_state when a script context is present —
+    Only reads st.session_state when a script context is present -
     background upload threads have none, and uploads don't need an LLM key
     anyway (document ingestion never calls OpenRouter).
     """
@@ -71,7 +71,7 @@ def api_get(path: str, **kwargs):
             st.error(msg)
         return None
     except httpx.HTTPStatusError as e:
-        msg = f"API error: {e.response.status_code} — {e.response.text[:200]}"
+        msg = f"API error: {e.response.status_code} - {e.response.text[:200]}"
         logger.error(msg)
         if is_main_thread:
             st.error(msg)
@@ -113,7 +113,7 @@ def api_post(path: str, json_data=None, files=None, **kwargs):
             st.error(msg)
         return None
     except httpx.HTTPStatusError as e:
-        msg = f"API error: {e.response.status_code} — {e.response.text[:200]}"
+        msg = f"API error: {e.response.status_code} - {e.response.text[:200]}"
         logger.error(msg)
         if is_main_thread:
             st.error(msg)
@@ -142,7 +142,7 @@ def api_delete(path: str, **kwargs):
             st.error(msg)
         return None
     except httpx.HTTPStatusError as e:
-        msg = f"API error: {e.response.status_code} — {e.response.text[:200]}"
+        msg = f"API error: {e.response.status_code} - {e.response.text[:200]}"
         logger.error(msg)
         if is_main_thread:
             st.error(msg)
@@ -155,7 +155,7 @@ def api_delete(path: str, **kwargs):
         return None
 
 
-# ─── Sidebar ──────────────────────────────────────────────────────────────
+# --- Sidebar --------------------------------------------------------------
 
 st.sidebar.title("🔍 CV Matcher")
 page = st.sidebar.radio(
@@ -218,7 +218,7 @@ def get_cached_stats():
     return api_get("/api/dashboard/stats")
 
 
-# ─── Components ───────────────────────────────────────────────────────────
+# --- Components -----------------------------------------------------------
 
 def score_bar(score: float, show_label: bool = True):
     """Render a colored score bar. Score is 0-100."""
@@ -283,7 +283,7 @@ def match_card(match: dict):
         col1, col2 = st.columns([3, 1])
         with col1:
             st.markdown(f"**{match.get('person_name', 'Unknown')}**")
-            st.caption(f"Source: {match.get('source_document', 'N/A')} · Section: {', '.join(match.get('sections', []))}")
+            st.caption(f"Source: {match.get('source_document', 'N/A')} | Section: {', '.join(match.get('sections', []))}")
         with col2:
             score = match.get("score", 0)
             if score >= 75:
@@ -398,7 +398,7 @@ def render_search_interface(key_suffix: str = ""):
             for match in display_matches:
                 match_card(match)
 
-        # ─── Parallel File Uploader Helper ────────────────────────────────────────
+        # --- Parallel File Uploader Helper ----------------------------------------
 
 def upload_files_parallel(uploaded_files):
     import concurrent.futures
@@ -470,7 +470,7 @@ def render_uploader(key_prefix: str, label_visibility: str = "visible"):
             st.rerun()
 
 
-# ─── Page: Home ───────────────────────────────────────────────────────────
+# --- Page: Home -----------------------------------------------------------
 
 def page_home():
     st.title("🔍 Agentic RAG CV Matcher")
@@ -539,14 +539,14 @@ def page_home():
                     st.error("Generation failed")
 
 
-# ─── Page: Query ──────────────────────────────────────────────────────────
+# --- Page: Query ----------------------------------------------------------
 
 def page_query():
     st.title("🔎 Query Knowledge Base")
     render_search_interface(key_suffix="query")
 
 
-# ─── Page: Documents ──────────────────────────────────────────────────────
+# --- Page: Documents ------------------------------------------------------
 
 def page_documents():
     st.title("📄 Document Manager")
@@ -630,7 +630,7 @@ def page_documents():
     render_uploader("doc_uploader")
 
 
-# ─── Page: Dashboard ──────────────────────────────────────────────────────
+# --- Page: Dashboard ------------------------------------------------------
 
 def page_dashboard():
     st.title("📊 Dashboard")
@@ -710,7 +710,7 @@ def page_dashboard():
         col2.metric("Avg Latency", f"{stats.get('avg_latency_ms', 0):.0f}ms")
 
 
-# ─── Page: Evaluation ─────────────────────────────────────────────────────
+# --- Page: Evaluation -----------------------------------------------------
 
 def _poll_evaluation_progress():
     """Poll GET /api/evaluation/progress until the background run finishes,
@@ -732,7 +732,7 @@ def _poll_evaluation_progress():
 
         label = f"Evaluating... {completed}/{total}"
         if current_question:
-            label += f" — {current_question[:60]}"
+            label += f" - {current_question[:60]}"
         progress_bar.progress(min(completed / total, 1.0), text=label)
 
         if status == "running":
@@ -800,7 +800,7 @@ def page_evaluation():
             st.warning(f"**{mode}**: {count} occurrence(s)")
 
 
-# ─── Router ───────────────────────────────────────────────────────────────
+# --- Router ---------------------------------------------------------------
 
 if page == "🏠 Home":
     page_home()

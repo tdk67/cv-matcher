@@ -1,4 +1,4 @@
-"""Tests for agent pipeline — planner, retriever, orchestrator."""
+"""Tests for agent pipeline - planner, retriever, orchestrator."""
 import tempfile
 
 import pytest

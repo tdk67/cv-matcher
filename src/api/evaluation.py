@@ -1,4 +1,4 @@
-"""Evaluation API — run test queries in the background and report progress.
+"""Evaluation API - run test queries in the background and report progress.
 
 The evaluation suite runs every default question through the full agentic
 pipeline sequentially (each up to 3 LLM calls, with retries), which can take
@@ -171,7 +171,7 @@ def _run_evaluation_job(api_key: str | None):
                 result_item = _score_result(item, ctx)
             except Exception as e:
                 # One bad LLM response (truncated JSON, rate limit, timeout)
-                # shouldn't abort the whole batch — record it and move on.
+                # shouldn't abort the whole batch - record it and move on.
                 logger.exception(f"Evaluation question failed: {item['question']!r}")
                 result_item = EvalResultItem(
                     question=item["question"],

@@ -1,7 +1,7 @@
 """OpenRouter API key validation.
 
 Lets the frontend give immediate feedback on whether a user-supplied key
-is valid, without spending it on a real completion — OpenRouter's own
+is valid, without spending it on a real completion - OpenRouter's own
 key-info endpoint is free and just reports whether the key is accepted.
 """
 

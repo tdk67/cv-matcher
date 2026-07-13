@@ -1,4 +1,4 @@
-"""Planner Agent — classifies query and decides retrieval strategy.
+"""Planner Agent - classifies query and decides retrieval strategy.
 
 Responsibilities:
 - Classify query type (keyword / similarity / complex / out_of_scope)

@@ -1,6 +1,6 @@
 """Document ingestion pipeline.
 
-Extract → Chunk → Scan → Store
+Extract -> Chunk -> Scan -> Store
 
 Handles file upload, format detection, text extraction, section-aware
 chunking, LLM Guard scanning, and ChromaDB storage.
@@ -166,7 +166,7 @@ def ingest_upload(
         # Write uploaded content
         file_path.write_bytes(file_content)
 
-        # Check if document already exists — remove old version
+        # Check if document already exists - remove old version
         existing_docs = vector_store.list_documents()
         for doc in existing_docs:
             if doc["source"] == filename:
@@ -195,6 +195,15 @@ def remove_document(filename: str, vector_store: CVVectorStore) -> dict:
         {"removed": bool, "filename": str, "chunks_removed": int}
     """
     chunks_removed = vector_store.delete_by_source(filename)
+
+    # Also delete the raw file from the uploads directory
+    file_path = settings.upload_path / filename
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except Exception as e:
+        logger.warning(f"Failed to delete raw file {filename} from disk: {e}")
+
     return {
         "removed": chunks_removed > 0,
         "filename": filename,

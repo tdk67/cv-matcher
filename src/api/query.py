@@ -1,4 +1,4 @@
-"""Query API — ask questions against the CV knowledge base."""
+"""Query API - ask questions against the CV knowledge base."""
 
 import unicodedata
 from collections import defaultdict
@@ -72,15 +72,12 @@ def query_knowledge_base(request: QueryRequest, api_key: str | None = Depends(ge
 
     # Convert match candidates to response format
     matches = []
-    for citation in ctx.citations:
-        if not isinstance(citation, dict):
-            continue
-
-        source_doc = citation.get("source_document", "")
+    for candidate in ctx.match_candidates:
+        source_doc = candidate.source_document
         target_key = _normalize_filename_key(source_doc)
 
         # Prioritize chunks containing candidate name to highlight the correct CV record
-        p_words = [_strip_diacritics(w) for w in citation.get("person_name", "").split() if len(w) > 2]
+        p_words = [_strip_diacritics(w) for w in candidate.person_name.split() if len(w) > 2]
         matching_chunks, other_chunks = [], []
         for text in chunks_by_source.get(target_key, []):
             text_clean = _strip_diacritics(text)
@@ -90,11 +87,11 @@ def query_knowledge_base(request: QueryRequest, api_key: str | None = Depends(ge
                 other_chunks.append(text)
 
         matches.append(MatchResult(
-            person_name=citation.get("person_name", "Unknown"),
-            score=citation.get("score", 0),
-            evidence=citation.get("evidence", ""),
+            person_name=candidate.person_name,
+            score=candidate.score,
+            evidence=candidate.evidence,
             source_document=source_doc,
-            sections=citation.get("sections", []),
+            sections=candidate.sections,
             matched_chunks=matching_chunks + other_chunks,
         ))
 

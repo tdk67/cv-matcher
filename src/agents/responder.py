@@ -1,4 +1,4 @@
-"""Responder Agent — generates grounded, cited answers from retrieved context.
+"""Responder Agent - generates grounded, cited answers from retrieved context.
 
 Responsibilities:
 - Format retrieved chunks into a clear context for the LLM
@@ -32,11 +32,11 @@ Your job is to generate a clear, grounded answer based ONLY on the retrieved CV 
 7. **Limit to Top 3 Matches:** You MUST limit the listed candidates in BOTH your human-readable answer text and in the `matches` JSON list to at most the **top 3 best matching candidates**. Completely ignore any candidates beyond the top 3 best matches.
 
 ## Match Score Guidelines:
-- 90-100%: Almost perfect match — all key requirements met
-- 75-89%: Strong match — most requirements met, minor gaps
-- 60-74%: Good match — core requirements met, some gaps
-- 50-59%: Marginal match — significant gaps
-- Below 50%: Poor match — do not include unless explicitly asked
+- 90-100%: Almost perfect match - all key requirements met
+- 75-89%: Strong match - most requirements met, minor gaps
+- 60-74%: Good match - core requirements met, some gaps
+- 50-59%: Marginal match - significant gaps
+- Below 50%: Poor match - do not include unless explicitly asked
 
 ## Output Format:
 
@@ -106,7 +106,7 @@ def respond(ctx: PipelineContext, api_key: str | None = None) -> PipelineContext
         retry_instruction=retry_instruction,
     )
 
-    # Call LLM (uses settings.rag_model — Validator uses settings.validation_model)
+    # Call LLM (uses settings.rag_model - Validator uses settings.validation_model)
     response = call_llm_sync(
         prompt=user_prompt,
         system_prompt=RESPONDER_SYSTEM_PROMPT,
@@ -120,11 +120,28 @@ def respond(ctx: PipelineContext, api_key: str | None = None) -> PipelineContext
 
     try:
         from src.utils.json_parser import parse_json_robust
+        from src.agents.context import MatchCandidate
         content = response.content.strip()
         result = parse_json_robust(content)
         ctx.answer = result.get("answer", "")
-        ctx.match_candidates = []  # Will be populated from matches
         ctx.citations = result.get("matches", [])[:3]  # Strictly limit to top 3 matches
+        
+        ctx.match_candidates = []
+        for m in ctx.citations:
+            if isinstance(m, dict):
+                try:
+                    score = float(m.get("score", 0))
+                except (ValueError, TypeError):
+                    score = 0.0
+                ctx.match_candidates.append(
+                    MatchCandidate(
+                        person_name=m.get("person_name", "Unknown"),
+                        score=score,
+                        evidence=m.get("evidence", ""),
+                        source_document=m.get("source_document", ""),
+                        sections=m.get("sections", []),
+                    )
+                )
 
     except Exception as e:
         raise RuntimeError(f"Failed to parse Responder JSON response: {str(e)}. Content was: {response.content}")

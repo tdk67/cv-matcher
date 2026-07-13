@@ -1,4 +1,4 @@
-"""Retriever Agent — searches the knowledge base based on Planner's strategy.
+"""Retriever Agent - searches the knowledge base based on Planner's strategy.
 
 Responsibilities:
 - Build effective search queries from extracted requirements
@@ -27,7 +27,7 @@ def retrieve(ctx: PipelineContext, vector_store: CVVectorStore | None = None) ->
     # Build search query from planner output
     search_query = _build_search_query(ctx)
 
-    # Execute similarity search — get more results than needed for ranking
+    # Execute similarity search - get more results than needed for ranking
     n_results = min(15, vector_store._collection.count())
     raw_results = vector_store.query(search_query, n_results=n_results)
 

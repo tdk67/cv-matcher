@@ -1,6 +1,6 @@
 """Shared data structures for the agentic pipeline.
 
-PipelineContext flows through all 4 agents: Planner → Retriever → Responder → Validator.
+PipelineContext flows through all 4 agents: Planner -> Retriever -> Responder -> Validator.
 """
 
 from dataclasses import dataclass, field
@@ -21,9 +21,10 @@ class MatchCandidate:
     """A matched person with score and evidence."""
     person_name: str
     score: float            # 0-100 percentage
-    evidence: list[str]     # supporting text snippets
+    evidence: str           # supporting text snippet/justification
     source_document: str
     sections: list[str]
+
 
 
 @dataclass

@@ -42,6 +42,33 @@ class TestDocumentsAPI:
         resp = client.delete("/api/documents/nonexistent_file.pdf")
         assert resp.status_code == 404
 
+    def test_get_content_traversal_prevention(self):
+        # Trying to traverse should be blocked with 403 or fall back to 404 (looking in upload path for sanitized basename)
+        resp = client.get("/api/documents/../../config.json/content")
+        assert resp.status_code in (403, 404)
+        if resp.status_code == 200:
+            assert "openrouter_api_key" not in resp.text
+
+    def test_delete_removes_file_from_disk(self):
+        from src.config import settings
+        # 1. Upload a temp file
+        test_filename = "temp_delete_test.txt"
+        client.post(
+            "/api/documents/upload",
+            files={"file": (test_filename, b"To be deleted", "text/plain")},
+        )
+        
+        file_path = settings.upload_path / test_filename
+        # File should exist on disk
+        assert file_path.exists()
+        
+        # 2. Delete document
+        del_resp = client.delete(f"/api/documents/{test_filename}")
+        assert del_resp.status_code in (200, 404) # It might be 404 if vectorstore deletion returns not found, but we ensure it clears disk
+        
+        # 3. File should be removed from disk
+        assert not file_path.exists()
+
 
 class TestDashboardAPI:
     def test_stats(self):

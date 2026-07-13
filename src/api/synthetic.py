@@ -1,4 +1,4 @@
-"""Synthetic data API — generate sample CVs on demand."""
+"""Synthetic data API - generate sample CVs on demand."""
 
 from pathlib import Path
 

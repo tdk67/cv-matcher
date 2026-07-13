@@ -1,6 +1,6 @@
-"""Pipeline Orchestrator — runs the full agentic pipeline with retry loop.
+"""Pipeline Orchestrator - runs the full agentic pipeline with retry loop.
 
-Flow: Planner → Retriever → Responder → Validator → (retry if failed)
+Flow: Planner -> Retriever -> Responder -> Validator -> (retry if failed)
 """
 
 import time

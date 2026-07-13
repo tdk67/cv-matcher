@@ -9,7 +9,7 @@ def get_api_key(x_openrouter_key: str | None = Header(default=None, alias=API_KE
     """Per-request OpenRouter API key supplied by the frontend, if any.
 
     Passed through to call_llm/call_llm_sync, which fall back to
-    src.config.settings.openrouter_api_key when this is None — supporting
+    src.config.settings.openrouter_api_key when this is None - supporting
     both a "bring your own key" public deployment (no server-side key set)
     and a local/dev setup with a key in .env.
     """
