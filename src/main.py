@@ -61,7 +61,17 @@ async def lifespan(app: FastAPI):
         from src.guardrails.scanner import create_scanner
         from src.vectorstore.store import get_vector_store
         create_scanner(settings.injection_threshold)
-        get_vector_store(settings.chroma_persist_dir)
+        store = get_vector_store(settings.chroma_persist_dir)
+        
+        # Pre-warm ChromaDB default embedding model to download and cache it before any parallel requests
+        logger.info("Pre-warming ChromaDB embedding function...")
+        store.add_chunks(
+            texts=["warmup"],
+            metadatas=[{"source": "warmup", "doc_id": "warmup", "section": "warmup", "chunk_index": 0, "tainted": False}],
+            ids=["warmup_id"]
+        )
+        store.delete_by_source("warmup")
+        logger.info("ChromaDB embedding function warmed up successfully.")
     except Exception as e:
         logger.error(f"Failed to pre-warm startup models: {str(e)}")
 

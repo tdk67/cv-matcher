@@ -259,7 +259,7 @@ agentic-rag-cv/
 |       |-- json_parser.py      # Robust JSON cleaner and parser
 |       |-- json_store.py       # Thread-safe read/append helpers for JSON-file-backed storage (using RLock)
 |       +-- filenames.py        # Mojibake filename repair (shared across upload/query/delete)
-|-- tests/                      # pytest test suite (38 tests)
+|-- tests/                      # pytest test suite (56 tests)
 |   |-- resources/
 |   |   +-- default_questions.json # Evaluation question dataset (test-local resource)
 |   |-- test_extractors.py      # Document extraction tests
