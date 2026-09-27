@@ -39,6 +39,19 @@ class Settings(BaseSettings):
     min_match_score: float = defaults.get("min_match_score", 0.5)
     max_retry_attempts: int = defaults.get("max_retry_attempts", 3)
 
+    # LLM transient-error retry
+    llm_max_retries: int = defaults.get("llm_max_retries", 3)
+    llm_retry_backoff_base: float = defaults.get("llm_retry_backoff_base", 1.0)
+
+    # Security
+    api_auth_token: str = defaults.get("api_auth_token", "")
+    cors_origins: list[str] = defaults.get(
+        "cors_origins", ["http://localhost:8501", "http://127.0.0.1:8501"]
+    )
+    rate_limits: dict = defaults.get(
+        "rate_limits", {"query": 30, "evaluation_start": 2, "key_validate": 10}
+    )
+
     # Evaluation Config
     eval_file_path: str = defaults.get("eval_file_path", ".data/evaluation/eval_results.json")
     eval_questions_path: str = "tests/resources/default_questions.json"

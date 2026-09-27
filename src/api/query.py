@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from src.agents.orchestrator import run_pipeline
 from src.api.deps import get_api_key
+from src.api.ratelimit import rate_limit
 from src.utils.filenames import repair_mojibake_filename
 from src.utils.query_log import log_query, QueryLogEntry
 
@@ -55,7 +56,7 @@ def _normalize_filename_key(name: str) -> str:
     return "".join(c for c in _strip_diacritics(base) if c.isalnum())
 
 
-@router.post("/", response_model=QueryResponse)
+@router.post("/", response_model=QueryResponse, dependencies=[Depends(rate_limit("query"))])
 def query_knowledge_base(request: QueryRequest, api_key: str | None = Depends(get_api_key)):
     """Ask a question. The agentic pipeline plans, retrieves, generates, and validates."""
     ctx = run_pipeline(
