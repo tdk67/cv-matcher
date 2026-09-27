@@ -4,13 +4,45 @@ All model calls go through this module. Model names come from config,
 never hardcoded.
 """
 
+import asyncio
 import json
+import logging
+import random
 import time
 from dataclasses import dataclass
 
 import httpx
 
 from src.config import settings
+
+logger = logging.getLogger(__name__)
+
+# HTTP status codes considered transient (worth retrying).
+_RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+
+# Transport-level exceptions considered transient (worth retrying).
+_RETRYABLE_EXCEPTIONS = (
+    httpx.TimeoutException,
+    httpx.ConnectError,
+    httpx.TransportError,
+    httpx.NetworkError,
+)
+
+
+def _retry_delay_seconds(attempt: int, retry_after: str | None) -> float:
+    """Compute how long to sleep before the next retry attempt.
+
+    Honors an OpenRouter `Retry-After` header if present (seconds), else
+    falls back to exponential backoff with jitter:
+    base * 2**attempt + random(0, base).
+    """
+    if retry_after:
+        try:
+            return float(retry_after)
+        except ValueError:
+            pass
+    base = settings.llm_retry_backoff_base
+    return base * (2 ** attempt) + random.uniform(0, base)
 
 
 @dataclass
@@ -86,52 +118,103 @@ async def call_llm(
     }
 
     start = time.time()
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                json=payload,
-                headers=headers,
-            )
-            latency_ms = (time.time() - start) * 1000
+    max_retries = settings.llm_max_retries
+    last_error = "Unknown error"
+    last_latency_ms = 0.0
 
-            if resp.status_code != 200:
-                error_text = resp.text[:500]
+    for attempt in range(max_retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+                latency_ms = (time.time() - start) * 1000
+
+                if resp.status_code != 200:
+                    error_text = resp.text[:500]
+                    last_error = f"API error {resp.status_code}: {error_text}"
+                    last_latency_ms = latency_ms
+
+                    if resp.status_code in _RETRYABLE_STATUS_CODES and attempt < max_retries:
+                        logger.warning(
+                            f"LLM call attempt {attempt + 1}/{max_retries + 1} failed with "
+                            f"transient status {resp.status_code}, retrying: {last_error}"
+                        )
+                        delay = _retry_delay_seconds(attempt, resp.headers.get("Retry-After"))
+                        await asyncio.sleep(delay)
+                        continue
+
+                    return LLMResponse(
+                        content="",
+                        model=model,
+                        input_tokens=0,
+                        output_tokens=0,
+                        latency_ms=latency_ms,
+                        success=False,
+                        error=last_error,
+                    )
+
+                data = resp.json()
+                choice = data.get("choices", [{}])[0]
+                content = choice.get("message", {}).get("content", "")
+                usage = data.get("usage", {})
+
                 return LLMResponse(
-                    content="",
+                    content=content,
                     model=model,
-                    input_tokens=0,
-                    output_tokens=0,
+                    input_tokens=usage.get("prompt_tokens", 0),
+                    output_tokens=usage.get("completion_tokens", 0),
                     latency_ms=latency_ms,
-                    success=False,
-                    error=f"API error {resp.status_code}: {error_text}",
+                    success=True,
                 )
 
-            data = resp.json()
-            choice = data.get("choices", [{}])[0]
-            content = choice.get("message", {}).get("content", "")
-            usage = data.get("usage", {})
+        except _RETRYABLE_EXCEPTIONS as e:
+            latency_ms = (time.time() - start) * 1000
+            last_error = f"Request failed: {str(e)}"
+            last_latency_ms = latency_ms
+
+            if attempt < max_retries:
+                logger.warning(
+                    f"LLM call attempt {attempt + 1}/{max_retries + 1} failed with "
+                    f"transient error, retrying: {last_error}"
+                )
+                delay = _retry_delay_seconds(attempt, None)
+                await asyncio.sleep(delay)
+                continue
 
             return LLMResponse(
-                content=content,
+                content="",
                 model=model,
-                input_tokens=usage.get("prompt_tokens", 0),
-                output_tokens=usage.get("completion_tokens", 0),
+                input_tokens=0,
+                output_tokens=0,
                 latency_ms=latency_ms,
-                success=True,
+                success=False,
+                error=last_error,
             )
 
-    except Exception as e:
-        latency_ms = (time.time() - start) * 1000
-        return LLMResponse(
-            content="",
-            model=model,
-            input_tokens=0,
-            output_tokens=0,
-            latency_ms=latency_ms,
-            success=False,
-            error=f"Request failed: {str(e)}",
-        )
+        except Exception as e:
+            latency_ms = (time.time() - start) * 1000
+            return LLMResponse(
+                content="",
+                model=model,
+                input_tokens=0,
+                output_tokens=0,
+                latency_ms=latency_ms,
+                success=False,
+                error=f"Request failed: {str(e)}",
+            )
+
+    return LLMResponse(
+        content="",
+        model=model,
+        input_tokens=0,
+        output_tokens=0,
+        latency_ms=last_latency_ms,
+        success=False,
+        error=last_error,
+    )
 
 
 def call_llm_sync(
@@ -182,48 +265,99 @@ def call_llm_sync(
     }
 
     start = time.time()
-    try:
-        with httpx.Client(timeout=60.0) as client:
-            resp = client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                json=payload,
-                headers=headers,
-            )
-            latency_ms = (time.time() - start) * 1000
+    max_retries = settings.llm_max_retries
+    last_error = "Unknown error"
+    last_latency_ms = 0.0
 
-            if resp.status_code != 200:
+    for attempt in range(max_retries + 1):
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                resp = client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+                latency_ms = (time.time() - start) * 1000
+
+                if resp.status_code != 200:
+                    last_error = f"API error {resp.status_code}: {resp.text[:500]}"
+                    last_latency_ms = latency_ms
+
+                    if resp.status_code in _RETRYABLE_STATUS_CODES and attempt < max_retries:
+                        logger.warning(
+                            f"LLM call attempt {attempt + 1}/{max_retries + 1} failed with "
+                            f"transient status {resp.status_code}, retrying: {last_error}"
+                        )
+                        delay = _retry_delay_seconds(attempt, resp.headers.get("Retry-After"))
+                        time.sleep(delay)
+                        continue
+
+                    return LLMResponse(
+                        content="",
+                        model=model,
+                        input_tokens=0,
+                        output_tokens=0,
+                        latency_ms=latency_ms,
+                        success=False,
+                        error=last_error,
+                    )
+
+                data = resp.json()
+                choice = data.get("choices", [{}])[0]
+                content = choice.get("message", {}).get("content", "")
+                usage = data.get("usage", {})
+
                 return LLMResponse(
-                    content="",
+                    content=content,
                     model=model,
-                    input_tokens=0,
-                    output_tokens=0,
+                    input_tokens=usage.get("prompt_tokens", 0),
+                    output_tokens=usage.get("completion_tokens", 0),
                     latency_ms=latency_ms,
-                    success=False,
-                    error=f"API error {resp.status_code}: {resp.text[:500]}",
+                    success=True,
                 )
 
-            data = resp.json()
-            choice = data.get("choices", [{}])[0]
-            content = choice.get("message", {}).get("content", "")
-            usage = data.get("usage", {})
+        except _RETRYABLE_EXCEPTIONS as e:
+            latency_ms = (time.time() - start) * 1000
+            last_error = f"Request failed: {str(e)}"
+            last_latency_ms = latency_ms
+
+            if attempt < max_retries:
+                logger.warning(
+                    f"LLM call attempt {attempt + 1}/{max_retries + 1} failed with "
+                    f"transient error, retrying: {last_error}"
+                )
+                delay = _retry_delay_seconds(attempt, None)
+                time.sleep(delay)
+                continue
 
             return LLMResponse(
-                content=content,
+                content="",
                 model=model,
-                input_tokens=usage.get("prompt_tokens", 0),
-                output_tokens=usage.get("completion_tokens", 0),
+                input_tokens=0,
+                output_tokens=0,
                 latency_ms=latency_ms,
-                success=True,
+                success=False,
+                error=last_error,
             )
 
-    except Exception as e:
-        latency_ms = (time.time() - start) * 1000
-        return LLMResponse(
-            content="",
-            model=model,
-            input_tokens=0,
-            output_tokens=0,
-            latency_ms=latency_ms,
-            success=False,
-            error=f"Request failed: {str(e)}",
-        )
+        except Exception as e:
+            latency_ms = (time.time() - start) * 1000
+            return LLMResponse(
+                content="",
+                model=model,
+                input_tokens=0,
+                output_tokens=0,
+                latency_ms=latency_ms,
+                success=False,
+                error=f"Request failed: {str(e)}",
+            )
+
+    return LLMResponse(
+        content="",
+        model=model,
+        input_tokens=0,
+        output_tokens=0,
+        latency_ms=last_latency_ms,
+        success=False,
+        error=last_error,
+    )

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from src.agents.orchestrator import run_pipeline
 from src.api.deps import get_api_key
+from src.api.ratelimit import rate_limit
 from src.config import settings
 from src.utils.json_store import append_to_json_list, read_json
 from src.vectorstore.store import get_vector_store
@@ -239,7 +240,7 @@ async def get_eval_results():
     return EvalResponse(runs=runs, latest=runs[-1] if runs else None)
 
 
-@router.post("/start", response_model=EvalProgress)
+@router.post("/start", response_model=EvalProgress, dependencies=[Depends(rate_limit("evaluation_start"))])
 async def start_evaluation(api_key: str | None = Depends(get_api_key)):
     """Kick off the evaluation suite in the background. Poll GET /progress for status."""
     if _eval_state.try_start(total=len(DEFAULT_QUESTIONS)):

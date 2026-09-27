@@ -5,12 +5,13 @@ from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.config import settings
 from src.api import documents, query, dashboard, evaluation, synthetic, apikey
+from src.api.deps import require_auth
 
 
 def _configure_logging() -> None:
@@ -87,17 +88,29 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
-app.include_router(query.router, prefix="/api/query", tags=["query"])
-app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
-app.include_router(evaluation.router, prefix="/api/evaluation", tags=["evaluation"])
-app.include_router(synthetic.router, prefix="/api/synthetic", tags=["synthetic"])
-app.include_router(apikey.router, prefix="/api/key", tags=["key"])
+app.include_router(
+    documents.router, prefix="/api/documents", tags=["documents"], dependencies=[Depends(require_auth)]
+)
+app.include_router(
+    query.router, prefix="/api/query", tags=["query"], dependencies=[Depends(require_auth)]
+)
+app.include_router(
+    dashboard.router, prefix="/api/dashboard", tags=["dashboard"], dependencies=[Depends(require_auth)]
+)
+app.include_router(
+    evaluation.router, prefix="/api/evaluation", tags=["evaluation"], dependencies=[Depends(require_auth)]
+)
+app.include_router(
+    synthetic.router, prefix="/api/synthetic", tags=["synthetic"], dependencies=[Depends(require_auth)]
+)
+app.include_router(
+    apikey.router, prefix="/api/key", tags=["key"], dependencies=[Depends(require_auth)]
+)
 
 
 @app.exception_handler(Exception)

@@ -12,5 +12,10 @@
   "injection_threshold": 0.8,
   "min_match_score": 0.5,
   "max_retry_attempts": 3,
+  "llm_max_retries": 3,
+  "llm_retry_backoff_base": 1.0,
+  "api_auth_token": "",
+  "cors_origins": ["http://localhost:8501", "http://127.0.0.1:8501"],
+  "rate_limits": {"query": 30, "evaluation_start": 2, "key_validate": 10},
   "eval_file_path": ".data/evaluation/eval_results.json"
 }

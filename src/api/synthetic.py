@@ -2,10 +2,16 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from src.data.cli import generate
+
 router = APIRouter()
+
+_VALID_FORMATS = {"all", "txt", "csv", "pdf"}
+_MIN_COUNT = 1
+_MAX_COUNT = 50
 
 
 class GenerateRequest(BaseModel):
@@ -26,45 +32,40 @@ class GenerateResponse(BaseModel):
 @router.post("/generate", response_model=GenerateResponse)
 def generate_synthetic_data(request: GenerateRequest):
     """Generate synthetic CV data for testing."""
-    import subprocess
-    import sys
+    if request.format not in _VALID_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid format: {request.format!r}. Must be one of {sorted(_VALID_FORMATS)}.",
+        )
+    if not (_MIN_COUNT <= request.count <= _MAX_COUNT):
+        raise HTTPException(
+            status_code=400,
+            detail=f"count must be between {_MIN_COUNT} and {_MAX_COUNT}, got {request.count}.",
+        )
 
-    # No cwd override: inherit the server process's own working directory
-    # (always the project root, same assumption every other relative path
-    # in this app relies on) so `-m src.data.cli` resolves correctly.
-    output_dir = str(Path("sample_data").resolve())
+    output_dir = Path("sample_data").resolve()
 
-    result = subprocess.run(
-        [
-            sys.executable, "-m", "src.data.cli",
-            "--count", str(request.count),
-            "--output", output_dir,
-            "--format", request.format,
-        ],
-        capture_output=True,
-        text=True,
-    )
-
-    if result.returncode != 0:
+    try:
+        generate(request.count, output_dir, request.format, seed=0)
+    except Exception as e:
         return GenerateResponse(
             success=False,
             count=0,
-            output_dir=output_dir,
+            output_dir=str(output_dir),
             pdf_count=0,
             txt_count=0,
             csv_count=0,
-            message=f"Generation failed: {result.stderr[:500]}",
+            message=f"Generation failed: {e}",
         )
 
-    out = Path(output_dir)
-    pdf_count = len(list((out / "pdf").glob("*.pdf"))) if (out / "pdf").exists() else 0
-    txt_count = len(list((out / "txt").glob("*.txt"))) if (out / "txt").exists() else 0
-    csv_count = 1 if (out / "personas.csv").exists() else 0
+    pdf_count = len(list((output_dir / "pdf").glob("*.pdf"))) if (output_dir / "pdf").exists() else 0
+    txt_count = len(list((output_dir / "txt").glob("*.txt"))) if (output_dir / "txt").exists() else 0
+    csv_count = 1 if (output_dir / "personas.csv").exists() else 0
 
     return GenerateResponse(
         success=True,
         count=request.count,
-        output_dir=output_dir,
+        output_dir=str(output_dir),
         pdf_count=pdf_count,
         txt_count=txt_count,
         csv_count=csv_count,

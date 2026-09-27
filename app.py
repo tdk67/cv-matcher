@@ -43,16 +43,23 @@ def _has_script_context() -> bool:
 
 
 def _auth_headers() -> dict:
-    """Attach the user-supplied OpenRouter key, if any, to outgoing requests.
+    """Attach the user-supplied OpenRouter key and/or API auth token, if any.
 
     Only reads st.session_state when a script context is present -
     background upload threads have none, and uploads don't need an LLM key
-    anyway (document ingestion never calls OpenRouter).
+    anyway (document ingestion never calls OpenRouter). API_AUTH_TOKEN comes
+    from the deployment environment (see README) and must match the backend's
+    api_auth_token when the backend is deployed with auth enabled.
     """
-    if not _has_script_context():
-        return {}
-    key = st.session_state.get("openrouter_api_key", "")
-    return {API_KEY_HEADER: key} if key else {}
+    headers = {}
+    if _has_script_context():
+        key = st.session_state.get("openrouter_api_key", "")
+        if key:
+            headers[API_KEY_HEADER] = key
+    api_token = os.getenv("API_AUTH_TOKEN", "").strip()
+    if api_token:
+        headers["X-API-Token"] = api_token
+    return headers
 
 
 def api_get(path: str, **kwargs):

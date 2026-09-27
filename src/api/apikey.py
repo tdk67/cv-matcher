@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from src.api.deps import get_api_key
+from src.api.ratelimit import rate_limit
 
 logger = logging.getLogger(__name__)
 
