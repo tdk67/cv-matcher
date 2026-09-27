@@ -161,6 +161,7 @@ def query_knowledge_base(request: QueryRequest, api_key: str | None = Depends(ge
         validation_passed=ctx.validation_passed,
         retry_count=ctx.retry_count,
         latency_ms=ctx.total_latency_ms,
+        out_of_scope=not ctx.is_in_scope,
     ))
 
     return QueryResponse(

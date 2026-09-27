@@ -19,13 +19,29 @@ logger = logging.getLogger(__name__)
 COLLECTION_NAME = "cv_knowledge_base"
 
 _shared_store_instance = None
+_shared_store_dir: str | None = None
 
 
 def get_vector_store(persist_dir: str = "./.data/chromadb") -> "CVVectorStore":
-    """Return a shared singleton instance of CVVectorStore to prevent reloading model on every request."""
-    global _shared_store_instance
+    """Return a shared singleton instance of CVVectorStore.
+
+    The singleton exists so the default embedding model loads once and is
+    reused across requests. Once created it is bound to ONE persist_dir;
+    requesting a different directory is a footgun (silent wrong-dir reads),
+    so it raises instead of silently returning a store attached to the old
+    directory.
+    """
+    global _shared_store_instance, _shared_store_dir
     if _shared_store_instance is None:
         _shared_store_instance = CVVectorStore(persist_dir=persist_dir)
+        _shared_store_dir = persist_dir
+        return _shared_store_instance
+    if _shared_store_dir != persist_dir:
+        raise RuntimeError(
+            f"get_vector_store: singleton already bound to {_shared_store_dir!r}, "
+            f"cannot also serve {persist_dir!r} (restart the process or construct "
+            "CVVectorStore directly for the second directory)"
+        )
     return _shared_store_instance
 
 
@@ -162,6 +178,35 @@ class CVVectorStore:
             self._collection.delete(where={"source": source})
             after = self._collection.count()
         return before - after
+
+    def replace_source(self, old_source: str, new_source: str) -> int:
+        """Atomically swap one source's chunks for another.
+
+        Deletes every chunk currently tagged `new_source` (the previous
+        version of the document) and renames the freshly ingested chunks
+        tagged `old_source` to `new_source` - all under the same lock, so no
+        other reader can observe the intermediate state. Used by the upload
+        pipeline's ingest-to-temp-then-swap flow.
+
+        Returns:
+            Number of chunks now tagged `new_source` (0 if none matched).
+        """
+        with self._mutex:
+            self._collection.delete(where={"source": new_source})
+            existing = self._collection.get(where={"source": old_source}, include=["metadatas"])
+            ids = existing.get("ids", [])
+            if not ids:
+                return 0
+            metadatas = []
+            for meta in existing.get("metadatas", [])[: len(ids)]:
+                fixed = dict(meta)
+                fixed["source"] = new_source
+                metadatas.append(fixed)
+            self._collection.update(
+                ids=ids,
+                metadatas=metadatas,
+            )
+        return len(ids)
 
     def list_documents(self) -> list[dict]:
         """List all unique documents with metadata and chunk counts.

@@ -6,8 +6,6 @@ Responsibilities:
 - Handle retry feedback from the Validator
 """
 
-import json
-
 from src.agents.context import PipelineContext
 from src.agents.llm_client import call_llm_sync
 

@@ -19,6 +19,7 @@ def run_pipeline(
     vector_store: CVVectorStore | None = None,
     max_retries: int | None = None,
     api_key: str | None = None,
+    deadline_seconds: float | None = None,
 ) -> PipelineContext:
     """Execute the full agentic RAG pipeline.
 
@@ -33,15 +34,27 @@ def run_pipeline(
         vector_store: Pre-initialized store (optional, creates one if None)
         max_retries: Override max retry attempts
         api_key: Per-request OpenRouter key (falls back to settings.openrouter_api_key)
+        deadline_seconds: Optional wall-clock budget for the whole pipeline.
+            Defaults to settings.pipeline_deadline_seconds when None. The
+            deadline is enforced inside call_llm_sync (between LLM attempts)
+            and checked here between pipeline steps, so a query cannot run
+            for minutes while the Streamlit client (120s timeout) has long
+            abandoned it.
 
     Returns:
         PipelineContext with all results
     """
+    from src.agents.llm_client import set_llm_deadline
+
     if max_retries is None:
         max_retries = settings.max_retry_attempts
 
+    budget = settings.pipeline_deadline_seconds if deadline_seconds is None else deadline_seconds
+
     ctx = PipelineContext(query=query, max_retries=max_retries)
     start_time = time.time()
+    deadline = time.monotonic() + budget if budget and budget > 0 else None
+    set_llm_deadline(deadline)
 
     # Step 1: Plan
     ctx = plan(ctx, api_key=api_key)
@@ -71,6 +84,22 @@ def run_pipeline(
         ctx.total_latency_ms = (time.time() - start_time) * 1000
         return ctx
 
+    # Wall-clock budget guard (checked between every step so a pipeline
+    # cannot overshoot the budget by many LLM calls).
+    def _abort_if_timed_out():
+        if deadline is not None and time.monotonic() > deadline:
+            ctx.answer = (
+                "The request took too long and was stopped before a full answer "
+                "could be generated. Please try a more specific question or try "
+                "again later."
+            )
+            ctx.validation_passed = False
+            ctx.timed_out = True
+            ctx.deadline_reason = "pipeline deadline exceeded"
+            ctx.total_latency_ms = (time.time() - start_time) * 1000
+            return True
+        return False
+
     # Step 2: Retrieve
     ctx = retrieve(ctx, vector_store)
 
@@ -88,10 +117,15 @@ def run_pipeline(
 
     # Steps 3-4: Respond + Validate with retry loop
     for attempt in range(max_retries):
+        if _abort_if_timed_out():
+            return ctx
         ctx.retry_count = attempt
 
         # Respond
         ctx = respond(ctx, api_key=api_key)
+
+        if _abort_if_timed_out():
+            return ctx
 
         # Validate
         ctx = validate(ctx, api_key=api_key)

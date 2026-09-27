@@ -1,12 +1,23 @@
 """In-memory sliding-window rate limiting (stdlib only, no new dependencies).
 
-Keyed by client IP plus a hashed OpenRouter key when present, plus an
-optional per-session identifier forwarded by the frontend. The session
-header is the fix for the classic reverse-proxy/Docker topology where
-every user's traffic arrives from one IP (Streamlit -> FastAPI over
-localhost inside one container): without it, all users would share one
-bucket. The header is optional and opaque - the backend only hashes and
-bucket-keys it, never parses or trusts its content.
+Every request is always charged to a HARD bucket keyed on client IP plus a
+hashed OpenRouter key when present. In addition, when the frontend forwards
+the optional `X-Session-ID` header, the request is also charged to a soft
+per-session SUB-bucket so users behind one reverse-proxy IP (Streamlit ->
+FastAPI over localhost inside the shipped Docker container) do not collapse
+into a single shared bucket.
+
+Security property: the session header is fully client-controlled and may be
+rotated/forged at will, so it can only ever SPLIT a hard bucket - it never
+replaces the IP accounting that actually bounds abuse. Rotating the header
+spawns fresh sub-buckets, but the hard per-IP bucket still trips at the same
+`limit` per minute, so the endpoint stays rate limited for a script that
+rotates headers just as tightly as for one that doesn't send any.
+
+The header is opaque: the backend hashes it with SHA-256 and never parses or
+logs its content. Tracking sub-buckets can be disabled with the environment
+variable `CV_MATCHER_TRACK_SESSION_RATELIMIT=0` (e.g. for tests that assert
+IP-only accounting).
 
 State lives in a single process; this is fine for the current single-worker
 deployment and intentionally not distributed.
@@ -14,6 +25,7 @@ deployment and intentionally not distributed.
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
 import time
 
@@ -26,6 +38,9 @@ _WINDOW_SECONDS = 60.0
 _MAX_TRACKED_KEYS = 10_000
 SESSION_ID_HEADER = "X-Session-ID"
 
+# If disabled, X-Session-ID is ignored entirely (IP-only accounting).
+_TRACK_SESSION_SUB_BUCKETS = os.getenv("CV_MATCHER_TRACK_SESSION_RATELIMIT", "1") != "0"
+
 _lock = threading.Lock()
 _hits: dict[str, list[float]] = {}
 
@@ -37,12 +52,28 @@ def _hash_key(api_key: str | None) -> str:
 
 
 def _client_key(request: Request, api_key: str | None) -> str:
+    """HARD bucket key: client IP + a hash of the OpenRouter key.
+
+    Never includes anything the client could rotate to reset accounting.
+    """
     client_ip = request.client.host if request.client else "unknown"
-    parts = [client_ip, _hash_key(api_key)]
+    return ":".join([client_ip, _hash_key(api_key)])
+
+
+def _session_sub_key(request: Request) -> str | None:
+    """Optional sub-bucket from the client-supplied session header, if any.
+
+    Returns a hashed key or None. Because the header is attacker-controlled
+    it may only split a hard bucket - the hard IP+key bucket is always
+    enforced on top (see _client_key), so rotating this header never resets
+    the per-IP accounting that actually bounds abuse.
+    """
+    if not _TRACK_SESSION_SUB_BUCKETS:
+        return None
     session_id = request.headers.get(SESSION_ID_HEADER)
-    if session_id:
-        parts.append(hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:16])
-    return ":".join(parts)
+    if not session_id:
+        return None
+    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:16]
 
 
 def _check_and_record(bucket_key: str, limit: int) -> float | None:
@@ -66,6 +97,17 @@ def _check_and_record(bucket_key: str, limit: int) -> float | None:
         return None
 
 
+def _enforce_bucket(bucket_key: str, limit: int) -> None:
+    """Record a hit on `bucket_key`; raise 429 if the bucket is over `limit`."""
+    retry_after = _check_and_record(bucket_key, limit)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Try again later.",
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
+
+
 def rate_limit(scope: str):
     """FastAPI dependency factory enforcing a per-minute limit for `scope`.
 
@@ -77,13 +119,17 @@ def rate_limit(scope: str):
         if not limit:
             return
 
-        bucket_key = f"{scope}:{_client_key(request, api_key)}"
-        retry_after = _check_and_record(bucket_key, limit)
-        if retry_after is not None:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Rate limit exceeded for '{scope}'. Try again later.",
-                headers={"Retry-After": str(int(retry_after) + 1)},
-            )
+        # Hard bucket: always enforced. The client IP (or the trusted
+        # reverse-proxy X-Forwarded-For, with --proxy-headers) is the source
+        # of truth; a client-supplied session header never removes this
+        # accounting.
+        _enforce_bucket(f"{scope}:{_client_key(request, api_key)}", limit)
+
+        # Optional session sub-bucket: splits the same limit per session, but
+        # the hard bucket above already bounds abuse even when the header is
+        # rotated, forged, or omitted.
+        session_key = _session_sub_key(request)
+        if session_key is not None:
+            _enforce_bucket(f"{scope}:session:{session_key}", limit)
 
     return _dependency

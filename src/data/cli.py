@@ -34,8 +34,7 @@ def _write_csv(personas, csv_path: Path) -> None:
 def _write_pdfs(personas, pdf_dir: Path) -> tuple[int, int]:
     """Write one PDF per persona using fpdf2 (latin-1 safe).
 
-    Returns (written, bytes_written). Falls back to TXT per-persona if fpdf2
-    is unavailable so the CLI still works on minimal installs.
+    Returns (written, bytes_written).
     """
     from fpdf import FPDF
 

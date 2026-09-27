@@ -192,7 +192,7 @@ def _run_evaluation_job(api_key: str | None, questions: list[dict]):
                     validation_passed=False,
                     retry_count=0,
                     latency_ms=(time.time() - start) * 1000,
-                    answer_preview=f"Pipeline error: {e}"[:200],
+                    answer_preview="Pipeline error: see server logs.",
                     passed=False,
                 )
 
@@ -266,6 +266,11 @@ async def start_evaluation(
         raise HTTPException(status_code=503, detail="No evaluation questions configured.")
     if _eval_state.try_start(total=len(questions)):
         threading.Thread(target=_run_evaluation_job, args=(api_key, questions), daemon=True).start()
+    else:
+        # A run is already in progress. A 200 snapshot here would make the
+        # client unable to tell "I started it" from "already running"; 409 is
+        # the honest signal and the frontend polls /progress anyway.
+        raise HTTPException(status_code=409, detail="An evaluation run is already in progress.")
     return _eval_state.snapshot()
 
 

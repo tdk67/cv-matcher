@@ -57,3 +57,5 @@ class PipelineContext:
     retry_count: int = 0
     max_retries: int = 3
     total_latency_ms: float = 0.0
+    timed_out: bool = False  # True when a caller-imposed deadline was reached
+    deadline_reason: str = ""

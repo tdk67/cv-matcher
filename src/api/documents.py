@@ -1,5 +1,6 @@
 """Document management API - upload, list, remove documents."""
 
+import logging
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
@@ -8,6 +9,8 @@ from src.config import settings
 from src.vectorstore.store import CVVectorStore, get_vector_store
 from src.ingestion.pipeline import ingest_upload, remove_document
 from src.utils.filenames import repair_mojibake_filename
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -118,7 +121,11 @@ def upload_document(file: UploadFile = File(...)):
     result = ingest_upload(content, filename, store)
 
     if not result.success and result.error:
-        raise HTTPException(status_code=422, detail=result.error)
+        # Log internals; return a generic detail. Internals can contain
+        # library paths / model errors and must not leak to the client
+        # (inconsistent with the sanitized global 500 handler).
+        logger.error("Upload ingestion failed for %r: %s", filename, result.error)
+        raise HTTPException(status_code=422, detail="Ingestion failed. Check the document format and try again.")
 
     return UploadResponse(
         success=result.success,
@@ -167,4 +174,5 @@ def get_document_content(filename: str):
         res = extract_text(file_path)
         return {"filename": safe_filename, "text": res["text"]}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read document: {str(e)}")
+        logger.exception("Failed to read document %r: %s", safe_filename, e)
+        raise HTTPException(status_code=500, detail="Failed to read document.")

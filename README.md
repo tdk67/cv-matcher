@@ -82,13 +82,13 @@ A single `Dockerfile` packages both the FastAPI backend and the Streamlit fronte
 ```bash
 docker build -t agentic-rag-cv .
 
-docker run -p 8501:8501 -p 8000:8000 \
+docker run -p 8501:8501 \
   -v cvmatcher_data:/app/.data \
   agentic-rag-cv
 ```
 
 - Open the app at `http://localhost:8501`.
-- The `-v cvmatcher_data:/app/.data` volume persists the ChromaDB knowledge base, uploads, evaluation history, and logs across container restarts - omit it for a fully ephemeral deployment.
+- The FastAPI backend binds `127.0.0.1` inside the container (see `docker-entrypoint.sh`) and is reached by the frontend over localhost - it is **not** published with `-p 8000:8000`. The default `api_auth_token` is empty, so publishing port 8000 to the host would expose upload/delete/query/eval to the network with auth off; leave it unpublished and/or set `API_AUTH_TOKEN` for any deployment where the backend might be reachable.
 - Do **not** set `OPENROUTER_API_KEY` in the container's environment for a public deployment - see [API Key Handling](#api-key-handling) above.
 
 
@@ -111,13 +111,14 @@ Cross-origin browser requests are locked to `cors_origins` in `config.json` (def
 
 ### Rate limiting
 
-Per-minute limits are configured under `rate_limits` (defaults: `query: 30`, `evaluation_start: 2`, `key_validate: 10`) and enforced by an in-process sliding-window limiter keyed on client IP + a hash of the OpenRouter key + the optional `X-Session-ID` header sent by the frontend. The session header makes the limits per-user even in the shipped Docker topology, where every user's traffic arrives from one IP (Streamlit calls FastAPI over localhost inside the container). The limits are per-process, so they reset on restart; scale-out would need a shared store.
+Per-minute limits are configured under `rate_limits` (defaults: `query: 30`, `evaluation_start: 2`, `key_validate: 10`) and enforced by an in-process sliding-window limiter. Every request is charged to a **hard bucket** keyed on client IP + a hash of the OpenRouter key; when the frontend also sends the optional `X-Session-ID` header, the request is additionally charged to a per-session sub-bucket. This splits the limit per-user even in the shipped Docker topology, where every user's traffic arrives from one IP (Streamlit calls FastAPI over localhost inside the container) — while the session header remains client-controlled, it can only *split* a hard bucket, never reset it, so rotating/forging it cannot bypass the per-IP limit. The limits are per-process, so they reset on restart; scale-out would need a shared store.
 
 ### Upload & query limits
 
 - `max_upload_size_mb` (default 50) - uploads are read in 1 MB chunks and rejected with `413` as soon as the cap is exceeded (no full slurp into RAM).
 - `max_extracted_chars` (default 200 000) - extracted text is capped so a small PDF/xlsx that expands to megabytes cannot produce thousands of chunks.
 - `max_query_length` (default 500) - longer questions are rejected with `400`.
+- `pipeline_deadline_seconds` (default 100) - wall-clock budget for one full query. The Streamlit frontend abandons a request after 120 s; without this budget the backend could keep retrying and spend your tokens on a request nobody is waiting for. Set to `0` to disable.
 
 ### Running behind a reverse proxy
 
@@ -146,7 +147,7 @@ Better fits for this Dockerfile:
 ```bash
 # 1. Clone the repository
 git clone <repository-url>
-cd agentic-rag-cv
+cd cv-matcher
 
 # 2. Create a virtual environment
 python -m venv venv
@@ -165,7 +166,9 @@ echo "OPENROUTER_API_KEY=your_key_here" > .env
 python -m src.data.cli --count 20 --output ./sample_data
 
 # 6. Start the backend
-uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+# 127.0.0.1 keeps the default-unauthenticated API local to this machine.
+# Use 0.0.0.0 only when API_AUTH_TOKEN is set (see "Deployment & Security").
+uvicorn src.main:app --reload --host 127.0.0.1 --port 8000
 
 # 7. Start the frontend (new terminal)
 streamlit run app.py --server.port 8501
@@ -244,7 +247,7 @@ curl http://localhost:8000/api/evaluation/progress
 ## File Structure
 
 ```
-agentic-rag-cv/
+cv-matcher/
 |-- app.py                      # Streamlit frontend (5 pages)
 |-- requirements.txt            # Python dependencies
 |-- config.json                 # Global configuration defaults (limits, guardrails, rate limits)
@@ -274,7 +277,7 @@ agentic-rag-cv/
 |   |   +-- orchestrator.py     # Pipeline orchestration + retry loop
 |   |-- ingestion/              # Document processing
 |   |   |-- extractors.py       # PDF/TXT/CSV/Excel text extraction
-|   |   |-- chunker.py          # Section-aware chunking (with localized headers)
+|   |   |-- chunker.py          # Section-aware chunking (English CV section headers)
 |   |   +-- pipeline.py         # Extract -> Chunk -> Scan -> Store
 |   |-- vectorstore/
 |   |   +-- store.py            # ChromaDB wrapper (add, query, delete, list)
@@ -288,7 +291,7 @@ agentic-rag-cv/
 |       |-- json_parser.py      # Robust JSON cleaner and parser
 |       |-- json_store.py       # Thread-safe read/append helpers for JSON-file-backed storage (using RLock)
 |       +-- filenames.py        # Mojibake filename repair (shared across upload/query/delete)
-|-- tests/                      # pytest test suite (73 tests + 14 live-LLM, auto-skipped)
+|-- tests/                      # pytest test suite (82 tests + 14 live-LLM, auto-skipped)
 |   |-- resources/
 |   |   +-- default_questions.json # Evaluation question dataset (test-local resource)
 |   |-- test_extractors.py      # Document extraction tests
@@ -300,7 +303,7 @@ agentic-rag-cv/
 |   |-- pdf/                    # 20 PDF CVs
 |   |-- txt/                    # 20 TXT CVs
 |   +-- personas.csv            # All personas in CSV
-+-- data/                       # Runtime data (gitignored)
++-- .data/                      # Runtime data (gitignored)
     |-- chromadb/               # Vector store persistence
     |-- uploads/                # Uploaded documents
     |-- evaluation/             # Evaluation results (eval_results.json)

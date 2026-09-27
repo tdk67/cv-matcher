@@ -67,13 +67,28 @@ class DocumentScanSummary:
 
 
 _shared_scanner = None
+_shared_scanner_threshold: float | None = None
 
 
 def create_scanner(threshold: float = 0.8) -> PromptInjection:
-    """Create or return the shared singleton PromptInjection scanner."""
-    global _shared_scanner
+    """Create or return the shared singleton PromptInjection scanner.
+
+    A PromptInjection scanner is bound to the threshold it was constructed
+    with. Silently returning an existing scanner constructed with a different
+    threshold would make runtime config changes to `injection_threshold`
+    appear to succeed while having no effect, so a mismatch raises loudly.
+    """
+    global _shared_scanner, _shared_scanner_threshold
     if _shared_scanner is None:
         _shared_scanner = PromptInjection(threshold=threshold)
+        _shared_scanner_threshold = threshold
+        return _shared_scanner
+    if _shared_scanner_threshold != threshold:
+        raise RuntimeError(
+            f"create_scanner: singleton already bound to threshold "
+            f"{_shared_scanner_threshold!r}, cannot also serve {threshold!r} "
+            "(restart the process to change the detection threshold)"
+        )
     return _shared_scanner
 
 

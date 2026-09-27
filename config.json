@@ -16,6 +16,7 @@
   "llm_max_retries": 3,
   "llm_retry_backoff_base": 1.0,
   "llm_retry_after_cap_seconds": 60,
+  "pipeline_deadline_seconds": 100,
   "api_auth_token": "",
   "cors_origins": ["http://localhost:8501", "http://127.0.0.1:8501"],
   "rate_limits": {"query": 30, "evaluation_start": 2, "key_validate": 10},

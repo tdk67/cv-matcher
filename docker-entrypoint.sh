@@ -4,7 +4,7 @@
 # public on platforms that expose a single port (see README Deployment section).
 set -e
 
-uvicorn src.main:app --host 0.0.0.0 --port 8000 --proxy-headers &
+uvicorn src.main:app --host 127.0.0.1 --port 8000 --proxy-headers &
 BACKEND_PID=$!
 
 echo "Waiting for backend to become healthy..."

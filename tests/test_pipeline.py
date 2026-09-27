@@ -279,3 +279,37 @@ class TestOrchestrator:
         run_pipeline(query="Find Python developer", vector_store=sample_store)
         elapsed = (time.time() - start) * 1000
         assert elapsed < 60000
+
+
+class TestPipelineDeadline:
+    """F3-05: the caller-imposed wall-clock budget bounds the pipeline."""
+
+    def test_deadline_aborts_before_llm(self, stub_llm, sample_store):
+        from src.agents.orchestrator import run_pipeline
+
+        set_stubs, _ = stub_llm
+        set_stubs([PLANNER_IN_SCOPE, RESPONDER_OK, VALIDATOR_PASS])
+
+        # An already-expired deadline must abort before any LLM call.
+        ctx = run_pipeline(
+            query="Find a Java developer with Spring Boot",
+            vector_store=sample_store,
+            deadline_seconds=0.001,
+        )
+        assert ctx.timed_out is True
+        assert "too long" in ctx.answer.lower()
+        assert ctx.validation_passed is False
+
+    def test_deadline_no_abort_when_budget_ok(self, stub_llm, sample_store):
+        from src.agents.orchestrator import run_pipeline
+
+        set_stubs, state = stub_llm
+        set_stubs([PLANNER_IN_SCOPE, RESPONDER_OK, VALIDATOR_PASS])
+
+        ctx = run_pipeline(
+            query="Find a Java developer with Spring Boot",
+            vector_store=sample_store,
+            deadline_seconds=60.0,
+        )
+        assert ctx.timed_out is False
+        assert ctx.validation_passed is True

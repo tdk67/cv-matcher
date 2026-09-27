@@ -17,6 +17,10 @@ _VALID_FORMATS = {"all", "txt", "csv", "pdf"}
 _MIN_COUNT = 1
 _MAX_COUNT = 50
 
+# CWD-relative output directory for generated personas. Module-level so tests
+# can point generation at a tmp dir (the endpoint itself stays unchanged).
+_OUTPUT_DIR = Path("sample_data").resolve()
+
 
 class GenerateRequest(BaseModel):
     count: int = Field(default=20, ge=_MIN_COUNT, le=_MAX_COUNT)
@@ -43,7 +47,7 @@ def generate_synthetic_data(request: GenerateRequest):
             detail=f"Invalid format: {request.format!r}. Must be one of {sorted(_VALID_FORMATS)}.",
         )
 
-    output_dir = Path("sample_data").resolve()
+    output_dir = _OUTPUT_DIR
 
     try:
         # Clean the target directory first so earlier runs' stale files
@@ -52,8 +56,13 @@ def generate_synthetic_data(request: GenerateRequest):
         for sub in ("txt", "pdf"):
             d = output_dir / sub
             if d.exists():
-                for p in d.glob("persona_*.txt") or d.glob("persona_*.pdf"):
-                    p.unlink()
+                # Iterate each glob unconditionally: Path.glob returns a
+                # generator, which is ALWAYS truthy even when it matches
+                # nothing - `a or b` short-circuits on the first glob and the
+                # second pattern is never iterated.
+                for pattern in ("persona_*.txt", "persona_*.pdf"):
+                    for p in d.glob(pattern):
+                        p.unlink()
         csv_path = output_dir / "personas.csv"
         if csv_path.exists():
             csv_path.unlink()
@@ -68,7 +77,7 @@ def generate_synthetic_data(request: GenerateRequest):
             pdf_count=0,
             txt_count=0,
             csv_count=0,
-            message=f"Generation failed: {e}",
+            message="Generation failed.",
         )
 
     return GenerateResponse(

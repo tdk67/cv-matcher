@@ -728,9 +728,15 @@ def page_dashboard():
     if stats.get("total_queries", 0) > 0:
         st.markdown("---")
         st.markdown("### Query Performance Summary")
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         col1.metric("Avg Match Score", f"{stats.get('avg_match_score', 0):.1f}%")
         col2.metric("Avg Latency", f"{stats.get('avg_latency_ms', 0):.0f}ms")
+        col3.metric(
+            "Out-of-scope rejections",
+            stats.get("out_of_scope_rejections", 0),
+            help="Queries correctly rejected as outside CV-expertise matching "
+                 "(these are not failed validations)",
+        )
 
 
 # --- Page: Evaluation -----------------------------------------------------

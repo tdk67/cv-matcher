@@ -6,8 +6,6 @@ Responsibilities:
 - Detect out-of-scope queries (not related to CV/expertise search)
 """
 
-import json
-
 from src.agents.context import PipelineContext
 from src.agents.llm_client import call_llm_sync
 

@@ -19,6 +19,7 @@ class DashboardStats(BaseModel):
     total_queries: int
     avg_match_score: float
     avg_latency_ms: float
+    out_of_scope_rejections: int = 0
 
 
 @router.get("/stats", response_model=DashboardStats)
@@ -37,4 +38,5 @@ def get_dashboard_stats():
         total_queries=q_stats["total_queries"],
         avg_match_score=q_stats["avg_match_score"],
         avg_latency_ms=q_stats["avg_latency_ms"],
+        out_of_scope_rejections=q_stats["out_of_scope_rejections"],
     )

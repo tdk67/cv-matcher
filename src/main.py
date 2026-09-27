@@ -1,6 +1,7 @@
 """Agentic RAG CV Matcher - FastAPI Backend."""
 
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -130,10 +131,13 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     to the log; the caller gets a generic message with a request id.
     """
     logger.exception(f"Unhandled error on {request.method} {request.url.path}")
-    request_id = request.headers.get("X-Request-ID", "")
-    detail = "Internal server error."
-    if request_id:
-        detail += f" (request id: {request_id})"
+    # Server-generated id: never reflects a client-supplied X-Request-ID
+    # verbatim into the response (client values are untrusted input).
+    request_id = secrets.token_hex(4)
+    detail = f"Internal server error. (request id: {request_id})"
+    # Log the id so an operator can correlate the traceback above with the
+    # caller's reported id, then return a generic message without internals.
+    logger.error("Internal server error request id: %s", request_id)
     return JSONResponse(
         status_code=500,
         content={"detail": detail},

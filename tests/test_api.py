@@ -150,10 +150,14 @@ class TestDocumentsAPI:
 
     def test_delete_removes_file_from_disk(self):
         test_filename = "temp_delete_test.txt"
-        client.post(
+        up_resp = client.post(
             "/api/documents/upload",
             files={"file": (test_filename, b"To be deleted", "text/plain")},
         )
+        # The upload must actually have succeeded for the file to exist on
+        # disk (better-than-nothing check; content-hash re-ingest deduping
+        # can legitimately yield chunks_created=0).
+        assert up_resp.status_code in (200, 422), up_resp.text
 
         file_path = settings.upload_path / test_filename
         assert file_path.exists()
@@ -251,3 +255,24 @@ class TestEvaluationAPI:
     def test_eval_start_invalid_max_questions(self):
         resp = client.post("/api/evaluation/start", params={"max_questions": 9999})
         assert resp.status_code == 400
+
+    def test_eval_start_returns_409_when_running(self, monkeypatch):
+        """F3-15: starting a second run while one is active is a 409, not a silent 200."""
+        import src.api.evaluation as eval_mod
+
+        # Fake an in-flight run without actually launching the background job.
+        state = eval_mod._EvalState()
+        monkeypatch.setattr(eval_mod, "_eval_state", state)
+        monkeypatch.setattr(
+            eval_mod, "_run_evaluation_job", lambda api_key, questions: None
+        )
+
+        # First start succeeds and transitions to running.
+        r1 = client.post("/api/evaluation/start", params={"max_questions": 1})
+        assert r1.status_code == 200
+        assert r1.json()["status"] == "running"
+
+        # Second start while the run is active must be 409.
+        r2 = client.post("/api/evaluation/start", params={"max_questions": 1})
+        assert r2.status_code == 409
+        assert "already in progress" in r2.json()["detail"]

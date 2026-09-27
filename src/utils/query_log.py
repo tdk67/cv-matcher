@@ -23,6 +23,7 @@ class QueryLogEntry:
     validation_passed: bool
     retry_count: int
     latency_ms: float
+    out_of_scope: bool = False
 
 
 def log_query(entry: QueryLogEntry) -> None:
@@ -31,12 +32,26 @@ def log_query(entry: QueryLogEntry) -> None:
 
 
 def get_query_stats() -> dict:
-    """Get aggregated query statistics."""
+    """Get aggregated query statistics.
+
+    F3-16: out-of-scope rejections log `validation_passed=False` by design
+    (they are correct rejections, not failed validations). The dashboard
+    reports avg_match_score ONLY over answered queries and exposes a
+    separate out_of_scope_rejections counter so the aggregates cannot be
+    misread as "failed validations".
+    """
     entries = read_json(LOG_FILE, default=[])
 
     if not entries:
-        return {"total_queries": 0, "avg_match_score": 0.0, "avg_latency_ms": 0.0}
+        return {
+            "total_queries": 0,
+            "avg_match_score": 0.0,
+            "avg_latency_ms": 0.0,
+            "out_of_scope_rejections": 0,
+        }
 
+    # avg_match_score over queries that actually produced matches; correct
+    # out-of-scope rejections must NOT drag it down as if they failed.
     scores = [e.get("top_score", 0) for e in entries if e.get("top_score", 0) > 0]
     latencies = [e.get("latency_ms", 0) for e in entries if e.get("latency_ms", 0) > 0]
 
@@ -44,4 +59,7 @@ def get_query_stats() -> dict:
         "total_queries": len(entries),
         "avg_match_score": sum(scores) / len(scores) if scores else 0.0,
         "avg_latency_ms": sum(latencies) / len(latencies) if latencies else 0.0,
+        "out_of_scope_rejections": sum(
+            1 for e in entries if e.get("out_of_scope", False)
+        ),
     }

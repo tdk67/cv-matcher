@@ -3,6 +3,12 @@
 All model calls go through this module. Model names come from config,
 never hardcoded. Only the synchronous `call_llm_sync` is used by agents
 (the async twin was dead code and was removed).
+
+Deadline support: a caller can impose a wall-clock budget on a whole
+pipeline via set_llm_deadline(); call_llm_sync() checks the (thread-local,
+context-propagated) deadline before each attempt and clamps per-attempt
+HTTP timeouts to the remaining budget, so a multi-call pipeline cannot
+silently run for minutes.
 """
 from __future__ import annotations
 
@@ -10,6 +16,7 @@ import json
 import logging
 import random
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 import httpx
@@ -17,6 +24,29 @@ import httpx
 from src.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Caller-imposed deadline (monotonic seconds), thread/context-local so
+# concurrent pipelines (e.g. api/query threads, background eval thread) do
+# not clobber each other.
+_llm_deadline: ContextVar[float | None] = ContextVar("llm_deadline", default=None)
+
+
+def set_llm_deadline(deadline_monotonic: float | None) -> None:
+    """Set the current context's LLM deadline (monotonic timestamp), or clear it.
+
+    ``call_llm_sync`` checks this before every attempt and clamps its HTTP
+    timeout to the remaining budget, so a caller can bound the total
+    wall-clock time a pipeline spends on LLM calls.
+    """
+    _llm_deadline.set(deadline_monotonic)
+
+
+def _deadline_remaining() -> float | None:
+    """Seconds left before the caller-imposed deadline, or None if unset."""
+    deadline = _llm_deadline.get()
+    if deadline is None:
+        return None
+    return max(0.0, deadline - time.monotonic())
 
 # HTTP status codes considered transient (worth retrying).
 _RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
@@ -36,6 +66,7 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 #   call_llm_sync(prompt, system_prompt, model, temperature, max_tokens, api_key)
 # returning an LLMResponse. When set, real HTTP calls are never made.
 CALL_LLM_OVERRIDE = None
+
 
 
 def _retry_delay_seconds(attempt: int, retry_after: str | None) -> float:
@@ -139,8 +170,27 @@ def call_llm_sync(
     last_latency_ms = 0.0
 
     for attempt in range(max_retries + 1):
+        # Caller-imposed deadline: abort instead of starting another attempt
+        # (each attempt can block for up to the HTTP timeout, which would
+        # overshoot a wall-clock budget for the whole pipeline).
+        remaining = _deadline_remaining()
+        if remaining is not None and remaining <= 0:
+            return LLMResponse(
+                content="",
+                model=model,
+                input_tokens=0,
+                output_tokens=0,
+                latency_ms=(time.time() - start) * 1000,
+                success=False,
+                error="Pipeline deadline exceeded; aborted before the next LLM attempt.",
+            )
         try:
-            with httpx.Client(timeout=60.0) as client:
+            # Clamp the per-attempt HTTP timeout to the remaining deadline so
+            # a single hung connection cannot overshoot it either.
+            http_timeout = 60.0
+            if remaining is not None:
+                http_timeout = min(http_timeout, max(remaining, 0.1))
+            with httpx.Client(timeout=http_timeout) as client:
                 resp = client.post(
                     OPENROUTER_URL,
                     json=payload,

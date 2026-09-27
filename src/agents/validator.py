@@ -7,8 +7,6 @@ Responsibilities:
 - Provide specific, actionable feedback for retry
 """
 
-import json
-
 from src.agents.context import PipelineContext
 from src.agents.llm_client import call_llm_sync
 from src.config import settings

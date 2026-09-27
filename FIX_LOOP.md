@@ -25,8 +25,8 @@ Fixer agent: **AdaL (`--agent-mode engineer`, different model than reviewer)** �
 ### Round C — P1/P2 (clean code + eval + tests + docs) — DONE (2026-09-27, review-02 round)
 - **F-08** Delete dead code (async `call_llm`, `score_bar`, unused config keys) OR wire it; honor (or remove) `use_llm_planner`/`use_llm_validator`; cap+validate request fields.
 - **F-09** Bounded upload read BEFORE size check; `max_extracted_chars` cap; `question` max_length.
-- **F-07** Externalize agent prompts to `config/prompts/`; enforce `min_match_score` from config (single source of truth).
-- **F-10** Eval scoring includes `validation_passed` + optional Judge-agent grade (grounded/cited/complete); guard empty-KB runs.
+- **F-07** Prompt externalization: `min_match_score` enforced from config (single source of truth) — DONE. Agent prompts (planner/responder/validator) remain module constants; externalizing them to `config/prompts/` was NOT implemented — FIX_LOOP claim downgraded to reflect this.
+- **F-10** Eval scoring includes `validation_passed` + guard empty-KB runs — DONE. The "optional Judge-agent grade" was NOT implemented: eval remains self-graded by the same-family validator. Claim amended.
 - **F-14** Inject LLM callable into agents (test seam); deterministic stubbed agent tests; tighten loose assertions; add coverage config.
 - **F-13** README: fix `run.sh`/`src.data.cli` references, add "Limitations & challenges" (required by PDF), troubleshooting, screenshots, TOC.
 

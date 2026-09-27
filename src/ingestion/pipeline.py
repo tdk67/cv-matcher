@@ -7,7 +7,8 @@ chunking, LLM Guard scanning, and ChromaDB storage.
 """
 
 import logging
-import shutil
+import os
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -191,29 +192,67 @@ def ingest_upload(
 ) -> IngestionResult:
     """Ingest an uploaded file (from FastAPI UploadFile).
 
-    Saves to upload dir, then runs the standard ingestion pipeline.
-    If a document with the same name exists, removes the old one first.
+    Saves to a temporary name, runs the standard ingestion pipeline, and
+    only on success atomically replaces any previous version of the same
+    document (vector chunks AND the raw file). This makes a failed
+    re-upload harmless: the previous good version stays queryable and its
+    raw file stays on disk; a rejected upload (e.g. prompt-injection scan
+    error under scan_fail_policy=error, empty text, extraction crash) leaves
+    no stray file in the upload dir.
     """
     upload_dir = settings.upload_path
-    file_path = upload_dir / filename
+    safe_filename = Path(filename).name
+    tmp_path = upload_dir / f".uploading-{os.getpid()}-{secrets.token_hex(4)}-{safe_filename}"
 
     try:
         upload_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write uploaded content
-        file_path.write_bytes(file_content)
+        # Write to a temp name FIRST: the old document must stay intact if
+        # the new bytes fail to extract/chunk/scan (no data-loss path).
+        tmp_path.write_bytes(file_content)
 
-        # Check if document already exists - remove old version
-        existing_docs = vector_store.list_documents()
-        for doc in existing_docs:
-            if doc["source"] == filename:
-                vector_store.delete_by_source(filename)
-                break
+        result = ingest_document(tmp_path, vector_store, scanner)
+
+        if not result.success:
+            # Rejected upload: nothing may be left in the upload dir. The raw
+            # file is unlinked so `GET /content` cannot serve text from a
+            # rejected (potentially injection-laden) document, and the file
+            # does not silently accumulate on disk. (An ingestion failure
+            # stores nothing, so the KB is untouched too.)
+            tmp_path.unlink(missing_ok=True)
+            return result
+
+        # Success: atomically swap the KB from the old version to the new
+        # one. The new chunks are tagged with the temp source name, so the
+        # previous version (tagged safe_filename) is removed and the new
+        # chunks renamed - all under one lock - before the raw file moves
+        # into place. If this raises, the whole upload reports failure.
+        vector_store.replace_source(tmp_path.name, safe_filename)
+
+        final_path = upload_dir / safe_filename
+        tmp_path.replace(final_path)
+
+        return IngestionResult(
+            success=True,
+            filename=safe_filename,
+            doc_id=result.doc_id,
+            format=result.format,
+            chunks_created=result.chunks_created,
+            tainted=result.tainted,
+            warnings=result.warnings,
+        )
     except Exception as e:
-        logger.exception(f"Failed to save/prepare upload for {filename}: {str(e)}")
+        # Best-effort rewind: if the KB swap partially applied, remove any
+        # temp-tagged chunks so nothing orphaned stays behind.
+        try:
+            vector_store.delete_by_source(tmp_path.name)
+        except Exception:
+            pass
+        tmp_path.unlink(missing_ok=True)
+        logger.exception(f"Failed to save/prepare upload for {safe_filename}: {str(e)}")
         return IngestionResult(
             success=False,
-            filename=filename,
+            filename=safe_filename,
             doc_id="",
             format="",
             chunks_created=0,
@@ -221,8 +260,6 @@ def ingest_upload(
             warnings=[],
             error=f"Upload failed: {str(e)}",
         )
-
-    return ingest_document(file_path, vector_store, scanner)
 
 
 def remove_document(filename: str, vector_store: CVVectorStore) -> dict:

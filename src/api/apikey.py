@@ -43,7 +43,7 @@ async def validate_api_key(api_key: str | None = Depends(get_api_key)):
             )
     except httpx.HTTPError as e:
         logger.warning(f"Key validation request failed: {e}")
-        return KeyValidationResponse(valid=False, detail=f"Could not reach OpenRouter: {e}")
+        return KeyValidationResponse(valid=False, detail="Could not reach OpenRouter.")
 
     if resp.status_code == 200:
         data = resp.json().get("data", {})
@@ -59,5 +59,5 @@ async def validate_api_key(api_key: str | None = Depends(get_api_key)):
 
     return KeyValidationResponse(
         valid=False,
-        detail=f"OpenRouter returned {resp.status_code}: {resp.text[:200]}",
+        detail=f"OpenRouter returned {resp.status_code}.",
     )

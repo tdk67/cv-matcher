@@ -128,6 +128,11 @@ class Settings(BaseSettings):
     # Cap for an upstream-provided Retry-After so a hostile/misconfigured
     # server can't park a worker thread for an unbounded time.
     llm_retry_after_cap_seconds: int = _int_or_default("llm_retry_after_cap_seconds", 60)
+    # Wall-clock budget for one full pipeline (planner + up to N responder +
+    # validator rounds). The Streamlit client abandons at 120s; the backend
+    # aborts at this budget so it cannot keep burning token/quota on a
+    # request the frontend has already given up on. <= 0 disables.
+    pipeline_deadline_seconds: float = _float_or_default("pipeline_deadline_seconds", 100.0)
 
     # Security
     api_auth_token: str = _str_or_default("api_auth_token", "")
