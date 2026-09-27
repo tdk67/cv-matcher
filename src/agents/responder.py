@@ -111,7 +111,7 @@ def respond(ctx: PipelineContext, api_key: str | None = None) -> PipelineContext
         prompt=user_prompt,
         system_prompt=RESPONDER_SYSTEM_PROMPT,
         temperature=0.2,
-        max_tokens=2048,
+        max_tokens=4096,
         api_key=api_key,
     )
 
