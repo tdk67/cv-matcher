@@ -68,7 +68,7 @@ def plan(ctx: PipelineContext, api_key: str | None = None) -> PipelineContext:
         prompt=user_prompt,
         system_prompt=system_prompt,
         temperature=0.1,
-        max_tokens=512,
+        max_tokens=2048,
         api_key=api_key,
     )
 

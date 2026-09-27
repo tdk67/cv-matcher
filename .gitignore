@@ -1,4 +1,4 @@
-data/
+/data/
 .data/
 sample_data/
 .pytest_cache/
@@ -8,3 +8,6 @@ __pycache__/
 
 # Code reviews (local only)
 reviews/
+.venv/
+logs/
+*.log
