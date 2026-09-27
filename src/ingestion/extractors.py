@@ -82,8 +82,7 @@ def _extract_csv(file_path: Path) -> dict:
 
     with open(file_path, "r", encoding="utf-8", errors="replace") as f:
         reader = csv.DictReader(f)
-        headers = reader.fieldnames or []
-        for i, row in enumerate(reader):
+        for row in reader:
             # Convert row to readable text
             parts = []
             for key, value in row.items():
@@ -108,30 +107,33 @@ def _extract_excel(file_path: Path) -> dict:
     from openpyxl import load_workbook
 
     wb = load_workbook(str(file_path), read_only=True, data_only=True)
-    sheets_text = []
-    warnings = []
+    try:
+        sheet_names = list(wb.sheetnames)
+        sheets_text = []
+        warnings = []
 
-    for sheet_name in wb.sheetnames:
-        ws = wb[sheet_name]
-        rows = []
-        for row in ws.iter_rows(values_only=True):
-            cells = [str(c) for c in row if c is not None]
-            if cells:
-                rows.append(" | ".join(cells))
-        if rows:
-            sheets_text.append(f"[Sheet: {sheet_name}]\n" + "\n".join(rows))
+        for sheet_name in sheet_names:
+            ws = wb[sheet_name]
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                cells = [str(c) for c in row if c is not None]
+                if cells:
+                    rows.append(" | ".join(cells))
+            if rows:
+                sheets_text.append(f"[Sheet: {sheet_name}]\n" + "\n".join(rows))
 
-    wb.close()
+        if not sheets_text:
+            warnings.append("Excel file contains no data")
 
-    if not sheets_text:
-        warnings.append("Excel file contains no data")
-
-    full_text = "\n\n".join(sheets_text)
-    return {
-        "text": full_text,
-        "page_count": len(wb.sheetnames),
-        "warnings": warnings,
-    }
+        full_text = "\n\n".join(sheets_text)
+        return {
+            "text": full_text,
+            "page_count": len(sheet_names),
+            "warnings": warnings,
+        }
+    finally:
+        # sheet_names was read before close, so no post-close attribute access.
+        wb.close()
 
 
 def _compute_doc_id(filename: str, content: str) -> str:

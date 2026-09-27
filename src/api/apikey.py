@@ -29,7 +29,7 @@ class KeyValidationResponse(BaseModel):
     is_free_tier: bool | None = None
 
 
-@router.get("/validate", response_model=KeyValidationResponse)
+@router.get("/validate", response_model=KeyValidationResponse, dependencies=[Depends(rate_limit("key_validate"))])
 async def validate_api_key(api_key: str | None = Depends(get_api_key)):
     """Check whether the supplied key (X-OpenRouter-Key header) is valid."""
     if not api_key:

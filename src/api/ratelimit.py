@@ -1,10 +1,17 @@
 """In-memory sliding-window rate limiting (stdlib only, no new dependencies).
 
-Keyed by client IP plus a hashed OpenRouter key when present, so a shared
-IP behind NAT doesn't share one bucket unless it's also sharing a key.
+Keyed by client IP plus a hashed OpenRouter key when present, plus an
+optional per-session identifier forwarded by the frontend. The session
+header is the fix for the classic reverse-proxy/Docker topology where
+every user's traffic arrives from one IP (Streamlit -> FastAPI over
+localhost inside one container): without it, all users would share one
+bucket. The header is optional and opaque - the backend only hashes and
+bucket-keys it, never parses or trusts its content.
+
 State lives in a single process; this is fine for the current single-worker
 deployment and intentionally not distributed.
 """
+from __future__ import annotations
 
 import hashlib
 import threading
@@ -17,6 +24,7 @@ from src.config import settings
 
 _WINDOW_SECONDS = 60.0
 _MAX_TRACKED_KEYS = 10_000
+SESSION_ID_HEADER = "X-Session-ID"
 
 _lock = threading.Lock()
 _hits: dict[str, list[float]] = {}
@@ -30,7 +38,11 @@ def _hash_key(api_key: str | None) -> str:
 
 def _client_key(request: Request, api_key: str | None) -> str:
     client_ip = request.client.host if request.client else "unknown"
-    return f"{client_ip}:{_hash_key(api_key)}"
+    parts = [client_ip, _hash_key(api_key)]
+    session_id = request.headers.get(SESSION_ID_HEADER)
+    if session_id:
+        parts.append(hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:16])
+    return ":".join(parts)
 
 
 def _check_and_record(bucket_key: str, limit: int) -> float | None:

@@ -165,7 +165,7 @@ def _persona(rng: random.Random, idx: int, max_experience: int = 4) -> Persona:
     name = f"{rng.choice(_FIRST_NAMES)} {rng.choice(_LAST_NAMES)}"
     title = rng.choice(_ROLES)
     domain = _DOMAIN_HINTS.get(title, ["software", "engineering"])
-    email = f"{name.lower().replace(' ', '.')}@example.org"
+    email = f"{name.lower().replace(' ', '.')}.{idx}@example.org"
     phone = f"+{rng.randint(10, 49)} {rng.randint(100, 999)} {rng.randint(100, 999)} {rng.randint(100, 999)}"
     location = rng.choice(_LOCATIONS)
 

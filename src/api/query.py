@@ -1,26 +1,30 @@
 """Query API - ask questions against the CV knowledge base."""
+from __future__ import annotations
 
+import logging
 import unicodedata
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from src.agents.orchestrator import run_pipeline
 from src.api.deps import get_api_key
 from src.api.ratelimit import rate_limit
+from src.config import settings
+from src.guardrails.scanner import create_scanner
 from src.utils.filenames import repair_mojibake_filename
 from src.utils.query_log import log_query, QueryLogEntry
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
 class QueryRequest(BaseModel):
-    question: str
-    max_retries: int | None = None
-    use_llm_planner: bool = True
-    use_llm_validator: bool = True
+    question: str = Field(..., min_length=1, max_length=500)
+    max_retries: int | None = Field(default=None, ge=1, le=5)
 
 
 class MatchResult(BaseModel):
@@ -42,6 +46,7 @@ class QueryResponse(BaseModel):
     latency_ms: float
     out_of_scope: bool
     rejection_reason: str | None
+    injection_detected: bool = False
 
 
 def _strip_diacritics(s: str) -> str:
@@ -56,9 +61,58 @@ def _normalize_filename_key(name: str) -> str:
     return "".join(c for c in _strip_diacritics(base) if c.isalnum())
 
 
+# A compiled, globally-shared PromptInjection scanner for the query path.
+# Pre-warmed in main.lifespan() along with the ingestion scanner; made
+# importable here (rather than importing create_scanner's singleton) so
+# tests can monkeypatch it deterministically.
+_query_scanner = None
+
+
+def _get_query_scanner():
+    global _query_scanner
+    if _query_scanner is None:
+        _query_scanner = create_scanner(settings.injection_threshold)
+    return _query_scanner
+
+
+def scan_query(query: str) -> bool:
+    """Scan a user query for prompt injection before it reaches the pipeline.
+
+    Returns True if an injection attempt was detected. A scanner error is
+    treated as a security boundary failure: the query is REJECTED (the
+    caller returns a 400) rather than silently proceeding - fail-closed,
+    because the prompt-injection scanner is the only defense on this path.
+    """
+    try:
+        _, is_clean, _ = _get_query_scanner().scan(query)
+        return not is_clean
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Query prompt-injection scan failed (rejecting query): %s", exc)
+        raise HTTPException(
+            status_code=400,
+            detail="Security scanner temporarily unavailable; please retry.",
+        ) from exc
+
+
 @router.post("/", response_model=QueryResponse, dependencies=[Depends(rate_limit("query"))])
 def query_knowledge_base(request: QueryRequest, api_key: str | None = Depends(get_api_key)):
     """Ask a question. The agentic pipeline plans, retrieves, generates, and validates."""
+    if len(request.question) > settings.max_query_length:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Question too long (max {settings.max_query_length} characters).",
+        )
+
+    # Run the PromptInjection scanner on the query path too (not only at
+    # ingestion): a tainted query must not be sent to the LLM context.
+    injection_detected = scan_query(request.question)
+    if injection_detected:
+        logger.warning("Query rejected: prompt-injection attempt detected: %r", request.question[:200])
+        raise HTTPException(
+            status_code=400,
+            detail="Query rejected: detected a prompt-injection attempt.",
+        )
+
     ctx = run_pipeline(
         query=request.question,
         max_retries=request.max_retries,
@@ -99,7 +153,7 @@ def query_knowledge_base(request: QueryRequest, api_key: str | None = Depends(ge
     # Log query for dashboard stats
     top_score = max((m.score for m in matches), default=0.0)
     log_query(QueryLogEntry(
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
         query=request.question,
         query_type=ctx.query_type,
         match_count=len(matches),
@@ -119,4 +173,5 @@ def query_knowledge_base(request: QueryRequest, api_key: str | None = Depends(ge
         latency_ms=ctx.total_latency_ms,
         out_of_scope=not ctx.is_in_scope,
         rejection_reason=ctx.rejection_reason if ctx.rejection_reason else None,
+        injection_detected=injection_detected,
     )

@@ -4,11 +4,15 @@ Handles collection management, document storage, similarity search,
 and document removal by metadata filter.
 """
 
+import logging
+import threading
 from pathlib import Path
 from dataclasses import dataclass
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
+
+logger = logging.getLogger(__name__)
 
 
 # Collection name
@@ -41,6 +45,7 @@ class CVVectorStore:
     """ChromaDB-backed vector store for CV documents."""
 
     def __init__(self, persist_dir: str = "./.data/chromadb"):
+        self._mutex = threading.RLock()
         self._client = chromadb.PersistentClient(
             path=persist_dir,
             settings=ChromaSettings(anonymized_telemetry=False),
@@ -49,6 +54,15 @@ class CVVectorStore:
             name=COLLECTION_NAME,
             metadata={"hnsw:space": "cosine"},
         )
+
+    def count(self) -> int:
+        """Return the number of chunks in the collection.
+
+        Public, thread-safe entry point so callers do not reach into the
+        private ChromaDB `_collection` attribute.
+        """
+        with self._mutex:
+            return self._collection.count()
 
     def add_chunks(
         self,
@@ -69,11 +83,24 @@ class CVVectorStore:
         if not texts:
             return 0
 
-        self._collection.add(
-            documents=texts,
-            metadatas=metadatas,
-            ids=ids,
-        )
+        with self._mutex:
+            # Re-ingesting the same document produces the same deterministic
+            # chunk ids (doc_id is a content hash) - warn loudly instead of
+            # silently upserting duplicates after a user error.
+            existing_ids = set(self._collection.get(ids=ids, include=[]).get("ids", [])) if ids else set()
+            dupes = existing_ids.intersection(ids)
+            if dupes:
+                logger.warning(
+                    "add_chunks: %d chunk id(s) already exist (re-ingest of the same "
+                    "document?); they will be overwritten: %s",
+                    len(dupes),
+                    sorted(dupes)[:5],
+                )
+            self._collection.add(
+                documents=texts,
+                metadatas=metadatas,
+                ids=ids,
+            )
         return len(texts)
 
     def query(
@@ -92,17 +119,18 @@ class CVVectorStore:
         Returns:
             List of result dicts with text, metadata, distance
         """
-        if self._collection.count() == 0:
+        if self.count() == 0:
             return []
 
         query_params = {
             "query_texts": [query_text],
-            "n_results": min(n_results, self._collection.count()),
+            "n_results": min(n_results, self.count()),
         }
         if where:
             query_params["where"] = where
 
-        results = self._collection.query(**query_params)
+        with self._mutex:
+            results = self._collection.query(**query_params)
 
         output = []
         if results and results["documents"] and results["documents"][0]:
@@ -129,9 +157,10 @@ class CVVectorStore:
             Number of chunks deleted (approximate)
         """
         # Get count before deletion
-        before = self._collection.count()
-        self._collection.delete(where={"source": source})
-        after = self._collection.count()
+        with self._mutex:
+            before = self._collection.count()
+            self._collection.delete(where={"source": source})
+            after = self._collection.count()
         return before - after
 
     def list_documents(self) -> list[dict]:
@@ -147,10 +176,11 @@ class CVVectorStore:
                 "sections": list[str],
             }]
         """
-        if self._collection.count() == 0:
+        if self.count() == 0:
             return []
 
-        all_data = self._collection.get(include=["metadatas"])
+        with self._mutex:
+            all_data = self._collection.get(include=["metadatas"])
         docs = {}
 
         for meta in all_data["metadatas"]:
@@ -178,7 +208,7 @@ class CVVectorStore:
     def get_stats(self) -> dict:
         """Get aggregate statistics about the knowledge base."""
         docs = self.list_documents()
-        total_chunks = self._collection.count()
+        total_chunks = self.count()
         total_docs = len(docs)
         tainted = sum(1 for d in docs if d["tainted"])
 
@@ -202,4 +232,4 @@ class CVVectorStore:
 
     def is_empty(self) -> bool:
         """Check if the knowledge base has any documents."""
-        return self._collection.count() == 0
+        return self.count() == 0

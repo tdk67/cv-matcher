@@ -23,14 +23,17 @@ langchain-text-splitters>=0.3.0
 llm-guard>=0.3.16
 
 # Synthetic data generation
-# (personas are built from src/data/resources/generator_data.yaml + random,
-# not Faker — Faker itself still gets installed transitively via llm-guard)
+# Personas are generated from curated name/skill pools in src/data/generator.py
+# (seeded PRNG, no external data files); fpdf2 renders the PDF CVs.
 fpdf2>=2.7.0
 
 # Utilities
 python-dotenv>=1.0.0  # not imported directly; required by pydantic-settings for .env loading
-pyyaml>=6.0.0
 
 # Frontend visualization
 matplotlib>=3.5.0
 pandas>=2.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0

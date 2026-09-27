@@ -1,13 +1,19 @@
-"""JSON-file storage helpers with corruption-tolerant reads.
+"""JSON-file storage helpers with corruption-tolerant reads and atomic writes.
 
 Shared by anything that persists app state as a JSON file on disk
 (query log, evaluation results) so the read/repair/write pattern lives
 in one place instead of being copy-pasted per caller.
+
+Writes go through a tmp file + os.replace() so a crash mid-write can't
+leave a truncated/corrupt target file.
 """
+from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -30,10 +36,24 @@ def read_json(path: Path, default: Any) -> Any:
 
 
 def write_json(path: Path, data: Any) -> None:
-    """Write data as JSON, creating parent directories as needed."""
+    """Write data as JSON (atomically: tmp + rename), creating parent dirs as needed."""
     with _file_lock:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+        payload = json.dumps(data, indent=2, default=str)
+        fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_path, path)
+        except Exception:
+            # Clean up the temp file on failure; never leave stray tmp files.
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 def append_to_json_list(path: Path, entry: Any, max_entries: int | None = None) -> None:

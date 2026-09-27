@@ -73,6 +73,27 @@ def list_documents():
     )
 
 
+def _read_upload_bounded(file: UploadFile) -> bytes:
+    """Read an upload in chunks, capping memory at max_upload_size_mb + 1MB.
+
+    The naive `file.file.read()` slurps the entire upload into RAM before the
+    size check runs, so a single multi-GB upload could OOM the process. This
+    reads in 1 MB chunks and stops as soon as the cap is exceeded.
+    """
+    cap = settings.max_upload_size_mb * 1024 * 1024
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = file.file.read(1024 * 1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > cap:
+            break
+    return b"".join(chunks)
+
+
 @router.post("/upload", response_model=UploadResponse)
 def upload_document(file: UploadFile = File(...)):
     """Upload and ingest a document (PDF, TXT, CSV, Excel)."""
@@ -86,7 +107,7 @@ def upload_document(file: UploadFile = File(...)):
             detail=f"Unsupported format: {suffix}. Allowed: {', '.join(sorted(allowed_formats))}",
         )
 
-    content = file.file.read()
+    content = _read_upload_bounded(file)
     if len(content) > settings.max_upload_size_mb * 1024 * 1024:
         raise HTTPException(
             status_code=413,

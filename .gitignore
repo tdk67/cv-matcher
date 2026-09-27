@@ -5,12 +5,12 @@ sample_data/
 __pycache__/
 *.pyc
 .env
-
-# Code reviews (local only)
-reviews/
 .venv/
 logs/
 *.log
+
+# Code reviews (local only)
+reviews/
 
 # Local artifacts & scratch
 artifacts/

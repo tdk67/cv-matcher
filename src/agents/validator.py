@@ -115,7 +115,14 @@ def validate(ctx: PipelineContext, api_key: str | None = None) -> PipelineContex
         from src.utils.json_parser import parse_json_robust
         content = response.content.strip()
         result = parse_json_robust(content)
-        ctx.validation_passed = result.get("passed", True)
+        # Fail-closed: absent/malformed `passed` must NOT silently mean
+        # "validated". Treat it as a validation failure with feedback.
+        if not isinstance(result, dict):
+            raise ValueError("response is not a JSON object")
+        passed = result.get("passed")
+        if not isinstance(passed, bool):
+            raise ValueError(f"'passed' field missing or not a boolean: {passed!r}")
+        ctx.validation_passed = passed
         ctx.validation_feedback = result.get("suggested_fix", "")
         ctx.validation_failure_type = result.get("failure_type", "none")
 

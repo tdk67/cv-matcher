@@ -46,13 +46,16 @@ def run_pipeline(
     # Step 1: Plan
     ctx = plan(ctx, api_key=api_key)
 
-    # Early exit: out of scope
+    # Early exit: out of scope. This is a *correct rejection*, not an
+    # answer that passed quality validation - recording validation_passed
+    # here would conflate "rejection was correct" with "answer passed
+    # validation" in the evaluation ledger.
     if not ctx.is_in_scope:
         ctx.answer = (
             f"I'm sorry, but I can only answer questions about the uploaded CVs "
             f"and team expertise. {ctx.rejection_reason}"
         )
-        ctx.validation_passed = True  # Rejection is the correct behavior
+        ctx.validation_passed = False
         ctx.total_latency_ms = (time.time() - start_time) * 1000
         return ctx
 
@@ -64,7 +67,7 @@ def run_pipeline(
             "The knowledge base is empty. Please upload CV documents first, "
             "then try your query again."
         )
-        ctx.validation_passed = True
+        ctx.validation_passed = False
         ctx.total_latency_ms = (time.time() - start_time) * 1000
         return ctx
 
@@ -79,7 +82,7 @@ def run_pipeline(
             "or your search criteria may be too specific. "
             "Try broadening your search."
         )
-        ctx.validation_passed = True
+        ctx.validation_passed = False
         ctx.total_latency_ms = (time.time() - start_time) * 1000
         return ctx
 

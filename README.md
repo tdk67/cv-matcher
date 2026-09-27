@@ -57,10 +57,12 @@ User -> Streamlit Frontend (app.py) -> FastAPI Backend (src/main.py)
 
 | Layer | Mechanism | What it catches |
 |-------|-----------|-----------------|
-| **Input** | LLM Guard PromptInjection scanner (DeBERTa) | Prompt injection in user queries |
-| **Ingestion** | Same scanner on document chunks | Instructions embedded in uploaded documents |
-| **Scope** | Planner offline/LLM classification | Out-of-scope queries (weather, code, poems) |
+| **Input (query path)** | LLM Guard PromptInjection scanner (DeBERTa) on every `/api/query/` request | Prompt injection in user queries - rejected with 400 before reaching the pipeline |
+| **Ingestion** | Same scanner on document chunks | Instructions embedded in uploaded documents - flagged as tainted chunks and excluded from retrieval |
+| **Scope** | Planner LLM classification | Out-of-scope queries (weather, code, poems) |
 | **Output** | Validator agent with retry loop | Hallucinated claims, missing citations, incomplete answers |
+
+Tainted (prompt-injection-flagged) chunks and chunks whose scan errored are **excluded from retrieval context** by default (`tainted_policy: exclude` in `config.json`). Set `tainted_policy: include` to only flag them in the UI. If the scanner itself errors on a chunk, `scan_fail_policy: error` (default) rejects the whole upload; `scan_fail_policy: log` stores the chunk marked `scan_status: error` instead.
 
 ## API Key Handling
 
@@ -89,6 +91,39 @@ docker run -p 8501:8501 -p 8000:8000 \
 - The `-v cvmatcher_data:/app/.data` volume persists the ChromaDB knowledge base, uploads, evaluation history, and logs across container restarts - omit it for a fully ephemeral deployment.
 - Do **not** set `OPENROUTER_API_KEY` in the container's environment for a public deployment - see [API Key Handling](#api-key-handling) above.
 
+
+## Deployment & Security Configuration
+
+### API auth token (recommended for public deployments)
+
+The backend can require a shared secret on every request:
+
+- Set `api_auth_token` in `config.json` (or start the backend with `API_AUTH_TOKEN`).
+- The frontend reads `API_AUTH_TOKEN` from its environment and sends it as `X-API-Token` on every request.
+- When the token is set, every route except `/api/health` returns `401` without it. Accepted via `X-API-Token` or `Authorization: Bearer <token>`.
+- The token comparison is constant-time (`secrets.compare_digest`).
+
+**Warning:** if you set a server-side `OPENROUTER_API_KEY` (in `.env` / `config.json`) but leave `api_auth_token` empty, the backend logs a startup warning: anyone who reaches `/api/query/` or `/api/evaluation/start` can spend your OpenRouter credits. For any non-local deployment set the auth token (or leave the server-side key unset and make visitors bring their own key).
+
+### CORS
+
+Cross-origin browser requests are locked to `cors_origins` in `config.json` (default: the two localhost Streamlit origins). For a public deployment served from a real domain, add that origin to the list.
+
+### Rate limiting
+
+Per-minute limits are configured under `rate_limits` (defaults: `query: 30`, `evaluation_start: 2`, `key_validate: 10`) and enforced by an in-process sliding-window limiter keyed on client IP + a hash of the OpenRouter key + the optional `X-Session-ID` header sent by the frontend. The session header makes the limits per-user even in the shipped Docker topology, where every user's traffic arrives from one IP (Streamlit calls FastAPI over localhost inside the container). The limits are per-process, so they reset on restart; scale-out would need a shared store.
+
+### Upload & query limits
+
+- `max_upload_size_mb` (default 50) - uploads are read in 1 MB chunks and rejected with `413` as soon as the cap is exceeded (no full slurp into RAM).
+- `max_extracted_chars` (default 200 000) - extracted text is capped so a small PDF/xlsx that expands to megabytes cannot produce thousands of chunks.
+- `max_query_length` (default 500) - longer questions are rejected with `400`.
+
+### Running behind a reverse proxy
+
+If you front the API with nginx/Cloud Run/etc., run uvicorn with `--proxy-headers` (the shipped `docker-entrypoint.sh` already does) and make sure the proxy sets `X-Forwarded-For` so the rate limiter sees real client IPs.
+
+---
 
 ### Where to host it
 
@@ -196,14 +231,12 @@ curl http://localhost:8000/api/evaluation/progress
 |---------|---------|
 | **FastAPI** | REST API backend |
 | **Streamlit** | Interactive web frontend |
-| **ChromaDB** | Vector database for semantic search |
-| **sentence-transformers** | Text embeddings (all-MiniLM-L6-v2) |
+| **ChromaDB** | Vector database for semantic search (bundled ONNX MiniLM embeddings) |
 | **langchain-text-splitters** | Recursive text splitting for chunking |
 | **LLM Guard** (Protect AI) | Prompt injection detection (DeBERTa classifier) |
 | **pypdf** | PDF text extraction |
 | **openpyxl** | Excel file reading |
 | **fpdf2** | Synthetic CV PDF generation |
-| **Faker** | Synthetic persona data |
 | **httpx** | OpenRouter API client |
 | **pydantic-settings** | Configuration from .env |
 | **uvicorn** | ASGI server for FastAPI |
@@ -213,11 +246,10 @@ curl http://localhost:8000/api/evaluation/progress
 ```
 agentic-rag-cv/
 |-- app.py                      # Streamlit frontend (5 pages)
-|-- requirements.txt            # Python dependencies (added pyyaml)
-|-- config.json                 # Global configuration defaults
+|-- requirements.txt            # Python dependencies
+|-- config.json                 # Global configuration defaults (limits, guardrails, rate limits)
 |-- .env.example                # Template for OPENROUTER_API_KEY secret
 |-- README.md                   # This file
-|-- run.sh                      # Convenience run script (local dev)
 |-- Dockerfile                  # Backend + frontend packaged into one container
 |-- docker-entrypoint.sh        # Starts backend, waits for health, then starts frontend
 |-- .dockerignore
@@ -249,17 +281,14 @@ agentic-rag-cv/
 |   |-- guardrails/
 |   |   +-- scanner.py          # LLM Guard wrapper
 |   |-- data/                   # Synthetic data generator
-|   |   |-- resources/
-|   |   |   +-- generator_data.yaml # Persona templates, pools, and text generation assets
-|   |   |-- personas.py         # Load generator pool & template personas
-|   |   |-- generator.py        # PDF/TXT/CV renderer
-|   |   +-- cli.py              # CLI entry point
+|   |   |-- generator.py        # Seeded persona pools (names/skills/roles) + Persona model
+|   |   +-- cli.py              # CLI entry point + shared generate() used by the API
 |   +-- utils/
 |       |-- query_log.py        # Query statistics tracking
 |       |-- json_parser.py      # Robust JSON cleaner and parser
 |       |-- json_store.py       # Thread-safe read/append helpers for JSON-file-backed storage (using RLock)
 |       +-- filenames.py        # Mojibake filename repair (shared across upload/query/delete)
-|-- tests/                      # pytest test suite (56 tests)
+|-- tests/                      # pytest test suite (73 tests + 14 live-LLM, auto-skipped)
 |   |-- resources/
 |   |   +-- default_questions.json # Evaluation question dataset (test-local resource)
 |   |-- test_extractors.py      # Document extraction tests
@@ -282,7 +311,7 @@ agentic-rag-cv/
 
 1. **Embedding quality**: Uses all-MiniLM-L6-v2 (384-dim) for speed. For production, swap to OpenAI text-embedding-3-small via config change.
 
-2. **Offline classifier precision**: The keyword-based fallback classifier (used when no OpenRouter key is configured) has lower precision than the LLM-powered classifier. It may reject some valid queries or accept some out-of-scope ones.
+2. **LLM dependency for classification**: There is **no offline/keyword fallback classifier** - the Planner is an LLM call. Without an OpenRouter key (per-request or server-side) queries fail loudly with a clear error. If you need offline classification, that would be a future extension.
 
 3. **PDF extraction**: Text-based PDFs only. Scanned/image-based PDFs will produce empty text. OCR was dropped from scope.
 
@@ -290,12 +319,12 @@ agentic-rag-cv/
 
 5. **No persistence of query history**: Query log is JSON-file-backed. Although thread-safety locks have been implemented to prevent concurrent write corruptions, it is not suitable for high-volume production use.
 
-6. **Shared knowledge base, no auth**: Each visitor can bring their own OpenRouter key (see API Key Handling), but the uploaded CVs and ChromaDB knowledge base are global - anyone who can reach a public deployment can see, query, and delete the same documents. Fine for a personal demo behind an unlisted URL; not a substitute for real multi-tenancy or access control.
+6. **Shared knowledge base**: Each visitor can bring their own OpenRouter key (see API Key Handling) and the optional API auth token gates the API itself, but the uploaded CVs and ChromaDB knowledge base are global - anyone who can reach a public deployment can see, query, and delete the same documents. Fine for a personal demo behind an unlisted URL; not a substitute for real multi-tenancy or access control.
 
 ## Testing
 
 ```bash
-# Run all tests
+# Run all tests (live-LLM tests are auto-skipped without an OpenRouter key)
 python -m pytest tests/ -v
 
 # Run specific test file
@@ -304,6 +333,8 @@ python -m pytest tests/test_pipeline.py -v
 # Run with coverage
 python -m pytest tests/ --cov=src --cov-report=term-missing
 ```
+
+Tests that exercise the real OpenRouter API are marked `@pytest.mark.live` and skipped automatically when no API key is configured, so the suite is green on a fresh clone. Set `OPENROUTER_API_KEY` (or a per-request key) to include them.
 
 ## Course Task Mapping
 

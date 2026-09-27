@@ -10,10 +10,10 @@ show a live progress bar instead of blocking on one long HTTP request.
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.agents.orchestrator import run_pipeline
@@ -140,7 +140,7 @@ def _score_result(item: dict, ctx) -> EvalResultItem:
     elif item["category"] == "edge":
         passed = ctx.is_in_scope  # should be handled gracefully either way
     else:
-        passed = ctx.is_in_scope and has_match  # should find matches
+        passed = (ctx.is_in_scope and has_match and ctx.validation_passed)  # should find matches that PASS validation
 
     return EvalResultItem(
         question=item["question"],
@@ -157,13 +157,21 @@ def _score_result(item: dict, ctx) -> EvalResultItem:
     )
 
 
-def _run_evaluation_job(api_key: str | None):
+def _run_evaluation_job(api_key: str | None, questions: list[dict]):
     """Background-thread worker. Updates _eval_state as each question completes."""
     store = get_vector_store(persist_dir=settings.chroma_persist_dir)
     results: list[EvalResultItem] = []
 
+    # Guard: running an empty-KB eval "succeeds" at 0% pass rate, which
+    # silently masks an unconfigured state. Fail loud instead.
+    if store.is_empty():
+        _eval_state.mark_error(
+            "Knowledge base is empty - upload (or generate) CVs before running the evaluation."
+        )
+        return
+
     try:
-        for item in DEFAULT_QUESTIONS:
+        for item in questions:
             _eval_state.set_current_question(item["question"])
 
             start = time.time()
@@ -210,7 +218,7 @@ def _run_evaluation_job(api_key: str | None):
             failure_modes[mode] = failure_modes.get(mode, 0) + 1
 
         run_result = EvalRunResult(
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             total_questions=total_q,
             passed=passed_count,
             failed=total_q - passed_count,
@@ -241,10 +249,23 @@ async def get_eval_results():
 
 
 @router.post("/start", response_model=EvalProgress, dependencies=[Depends(rate_limit("evaluation_start"))])
-async def start_evaluation(api_key: str | None = Depends(get_api_key)):
+async def start_evaluation(
+    max_questions: int | None = None,
+    api_key: str | None = Depends(get_api_key),
+):
     """Kick off the evaluation suite in the background. Poll GET /progress for status."""
-    if _eval_state.try_start(total=len(DEFAULT_QUESTIONS)):
-        threading.Thread(target=_run_evaluation_job, args=(api_key,), daemon=True).start()
+    questions = DEFAULT_QUESTIONS
+    if max_questions is not None:
+        if max_questions < 1 or max_questions > len(DEFAULT_QUESTIONS):
+            raise HTTPException(
+                status_code=400,
+                detail=f"max_questions must be between 1 and {len(DEFAULT_QUESTIONS)}",
+            )
+        questions = DEFAULT_QUESTIONS[:max_questions]
+    if not questions:
+        raise HTTPException(status_code=503, detail="No evaluation questions configured.")
+    if _eval_state.try_start(total=len(questions)):
+        threading.Thread(target=_run_evaluation_job, args=(api_key, questions), daemon=True).start()
     return _eval_state.snapshot()
 
 

@@ -43,19 +43,31 @@ def _has_script_context() -> bool:
 
 
 def _auth_headers() -> dict:
-    """Attach the user-supplied OpenRouter key and/or API auth token, if any.
+    """Attach the user-supplied OpenRouter key, API auth token, and a
+    per-session identifier, if any.
 
     Only reads st.session_state when a script context is present -
     background upload threads have none, and uploads don't need an LLM key
     anyway (document ingestion never calls OpenRouter). API_AUTH_TOKEN comes
     from the deployment environment (see README) and must match the backend's
     api_auth_token when the backend is deployed with auth enabled.
+
+    X-Session-ID is a stable per-browser-session opaque id that the backend
+    hashes into its rate-limit bucket key. Without it, every user's traffic
+    in the shipped Docker topology arrives from one IP (Streamlit -> FastAPI
+    over localhost) and all users would share one rate-limit bucket.
     """
     headers = {}
     if _has_script_context():
         key = st.session_state.get("openrouter_api_key", "")
         if key:
             headers[API_KEY_HEADER] = key
+        session_id = st.session_state.get("session_id")
+        if not session_id:
+            import uuid
+            session_id = str(uuid.uuid4())
+            st.session_state.session_id = session_id
+        headers["X-Session-ID"] = session_id
     api_token = os.getenv("API_AUTH_TOKEN", "").strip()
     if api_token:
         headers["X-API-Token"] = api_token
@@ -227,17 +239,6 @@ def get_cached_stats():
 
 # --- Components -----------------------------------------------------------
 
-def score_bar(score: float, show_label: bool = True):
-    """Render a colored score bar. Score is 0-100."""
-    if score >= 75:
-        color = "green"
-    elif score >= 50:
-        color = "orange"
-    else:
-        color = "red"
-
-    label = f"{score:.0f}%" if show_label else ""
-    st.progress(min(score / 100, 1.0), text=f"Match: {label}" if show_label else None)
 
 
 @st.dialog("Document Viewer", width="large")
@@ -361,14 +362,21 @@ def render_search_interface(key_suffix: str = ""):
                     "/api/query/",
                     json_data={
                         "question": query,
-                        "use_llm_planner": True,
-                        "use_llm_validator": True,
                     }
                 )
                 st.session_state[res_key] = result
 
     result = st.session_state[res_key]
     if result:
+        # A dict containing {detail: ...} means the request itself failed
+        # (429 rate limit, 401 bad token, 500 backend error, ...). If we
+        # rendered it as "answers", the user would be told their answer
+        # failed validation when in reality it never completed - an
+        # error-honesty violation. Show the real error instead.
+        if isinstance(result, dict) and "detail" in result and "answer" not in result:
+            st.error(f"Request failed: {result.get('detail', 'unknown error')}")
+            return
+
         # Query type badge
         qt = result.get("query_type", "unknown")
         if qt == "out_of_scope":
@@ -600,10 +608,18 @@ def page_documents():
     with col_del_btn:
         if selected_files:
             if st.button(f"🗑️ Remove Selected ({len(selected_files)})", type="primary", key="batch_delete_btn"):
+                import urllib.parse
                 with st.spinner("Removing selected documents..."):
+                    failures = []
                     for filename in selected_files:
-                        api_delete(f"/api/documents/{filename}")
-                st.success(f"Successfully removed {len(selected_files)} document(s)!")
+                        encoded = urllib.parse.quote(filename, safe="")
+                        res = api_delete(f"/api/documents/{encoded}")
+                        if res is None:
+                            failures.append(filename)
+                if failures:
+                    st.error(f"Failed to remove: {', '.join(failures)}")
+                else:
+                    st.success(f"Successfully removed {len(selected_files)} document(s)!")
                 st.cache_data.clear()
                 # Clean up deleted checkboxes from session state
                 for filename in selected_files:

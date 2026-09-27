@@ -1,11 +1,15 @@
 """Synthetic data API - generate sample CVs on demand."""
+from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.data.cli import generate
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -15,8 +19,9 @@ _MAX_COUNT = 50
 
 
 class GenerateRequest(BaseModel):
-    count: int = 20
+    count: int = Field(default=20, ge=_MIN_COUNT, le=_MAX_COUNT)
     format: str = "all"  # pdf, txt, csv, all
+    seed: int | None = None
 
 
 class GenerateResponse(BaseModel):
@@ -37,17 +42,25 @@ def generate_synthetic_data(request: GenerateRequest):
             status_code=400,
             detail=f"Invalid format: {request.format!r}. Must be one of {sorted(_VALID_FORMATS)}.",
         )
-    if not (_MIN_COUNT <= request.count <= _MAX_COUNT):
-        raise HTTPException(
-            status_code=400,
-            detail=f"count must be between {_MIN_COUNT} and {_MAX_COUNT}, got {request.count}.",
-        )
 
     output_dir = Path("sample_data").resolve()
 
     try:
-        generate(request.count, output_dir, request.format, seed=0)
+        # Clean the target directory first so earlier runs' stale files
+        # (e.g. higher-numbered personas after a smaller regeneration) are
+        # not counted or later ingested by upstream ingestion paths.
+        for sub in ("txt", "pdf"):
+            d = output_dir / sub
+            if d.exists():
+                for p in d.glob("persona_*.txt") or d.glob("persona_*.pdf"):
+                    p.unlink()
+        csv_path = output_dir / "personas.csv"
+        if csv_path.exists():
+            csv_path.unlink()
+
+        stats = generate(request.count, output_dir, request.format, seed=request.seed or 0)
     except Exception as e:
+        logger.exception("Synthetic generation failed")
         return GenerateResponse(
             success=False,
             count=0,
@@ -58,16 +71,15 @@ def generate_synthetic_data(request: GenerateRequest):
             message=f"Generation failed: {e}",
         )
 
-    pdf_count = len(list((output_dir / "pdf").glob("*.pdf"))) if (output_dir / "pdf").exists() else 0
-    txt_count = len(list((output_dir / "txt").glob("*.txt"))) if (output_dir / "txt").exists() else 0
-    csv_count = 1 if (output_dir / "personas.csv").exists() else 0
-
     return GenerateResponse(
         success=True,
-        count=request.count,
+        count=stats["count"],
         output_dir=str(output_dir),
-        pdf_count=pdf_count,
-        txt_count=txt_count,
-        csv_count=csv_count,
-        message=f"Generated {request.count} personas with {pdf_count} PDFs, {txt_count} TXTs, {csv_count} CSV",
+        pdf_count=stats["pdf_count"],
+        txt_count=stats["txt_count"],
+        csv_count=stats["csv_count"],
+        message=(
+            f"Generated {stats['count']} personas with "
+            f"{stats['pdf_count']} PDFs, {stats['txt_count']} TXTs, {stats['csv_count']} CSV"
+        ),
     )

@@ -1,6 +1,7 @@
 """Query log for tracking stats.
 
 Simple JSON file-backed query log for dashboard statistics.
+Atomic write (tmp + rename) so a crash mid-write can't corrupt the file.
 """
 
 from pathlib import Path

@@ -63,6 +63,12 @@ async def lifespan(app: FastAPI):
         from src.vectorstore.store import get_vector_store
         create_scanner(settings.injection_threshold)
         store = get_vector_store(settings.chroma_persist_dir)
+
+        # Pre-warm the query-path scanner too so the first /api/query/ request
+        # doesn't pay the DeBERTa model-load latency (or fail under load).
+        from src.api.query import _get_query_scanner
+        _get_query_scanner()
+        logger.info("Query-path prompt-injection scanner pre-warmed.")
         
         # Pre-warm ChromaDB default embedding model to download and cache it before any parallel requests
         logger.info("Pre-warming ChromaDB embedding function...")
@@ -75,6 +81,8 @@ async def lifespan(app: FastAPI):
         logger.info("ChromaDB embedding function warmed up successfully.")
     except Exception as e:
         logger.error(f"Failed to pre-warm startup models: {str(e)}")
+
+    settings.warn_if_server_keyed_without_auth()
 
     yield
 
@@ -116,11 +124,19 @@ app.include_router(
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """Log the full traceback for any exception that slips past route-level
-    handling, so a failure is never visible only as a Streamlit error toast."""
+    handling, so a failure is never visible only as a Streamlit error toast.
+
+    The response leaks NO exception internals (paths, model errors): those go
+    to the log; the caller gets a generic message with a request id.
+    """
     logger.exception(f"Unhandled error on {request.method} {request.url.path}")
+    request_id = request.headers.get("X-Request-ID", "")
+    detail = "Internal server error."
+    if request_id:
+        detail += f" (request id: {request_id})"
     return JSONResponse(
         status_code=500,
-        content={"detail": f"Internal server error: {exc}"},
+        content={"detail": detail},
     )
 
 

@@ -28,7 +28,7 @@ def retrieve(ctx: PipelineContext, vector_store: CVVectorStore | None = None) ->
     search_query = _build_search_query(ctx)
 
     # Execute similarity search - get more results than needed for ranking
-    n_results = min(15, vector_store._collection.count())
+    n_results = min(15, vector_store.count())
     raw_results = vector_store.query(search_query, n_results=n_results)
 
     # Convert to RetrievedChunk objects
@@ -71,24 +71,41 @@ def _rank_chunks(
     """Rank chunks by relevance.
 
     Strategy:
-    1. Filter out low-similarity chunks (< 0.15 with all-MiniLM-L6-v2)
-    2. Group by source document
-    3. Return top chunks, ensuring diversity across sections
+    1. Drop tainted (prompt-injection flagged) and scan-errored chunks when
+       `tainted_policy` is "exclude" (default) - they never reach the
+       Responder's context.
+    2. Filter out low-similarity chunks below `min_match_score` from config
+       (single source of truth; the old hardcoded 0.15 floor is gone).
+    3. Group by source document
+    4. Return top chunks, ensuring diversity across sections
     """
     if not chunks:
         return []
 
-    # Filter very low similarity
-    filtered = [c for c in chunks if c.similarity > 0.15]
+    # Guardrails: by default, tainted/errored chunks never reach the LLM context.
+    if settings.tainted_policy == "exclude":
+        chunks = [
+            c for c in chunks
+            if c.metadata.get("scan_status") in (None, "clean") and not c.metadata.get("tainted", False)
+        ]
 
+    if not chunks:
+        return []
+
+    # Enforce the configured minimum similarity (single source of truth).
+    min_score = settings.min_match_score
+    filtered = [c for c in chunks if c.similarity >= min_score]
+
+    # Sort by similarity descending first, so the fallback below picks the
+    # genuinely best chunks rather than insertion order.
+    chunks.sort(key=lambda c: c.similarity, reverse=True)
     if not filtered:
-        # If nothing passes the threshold, take top 3 anyway
-        filtered = chunks[:3]
+        # Honest "no relevant candidate" signal: return nothing instead of
+        # silently serving low-relevance CVs. The orchestrator then reports
+        # that no matching candidates were found.
+        return []
 
-    # Sort by similarity descending
-    filtered.sort(key=lambda c: c.similarity, reverse=True)
-
-    # Deduplicate: if two chunks from same section are very similar, keep the best
+    # Deduplicate: if two chunks from same section look identical, keep the best
     seen = set()
     deduped = []
     for chunk in filtered:

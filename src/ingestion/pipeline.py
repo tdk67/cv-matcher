@@ -55,8 +55,15 @@ def ingest_document(
         IngestionResult with stats and warnings
     """
     try:
-        # Step 1: Extract text
+        # Step 1: Extract text (capped so a small file that expands to
+        # megabytes of text can't turn into a CPU/memory DoS via thousands
+        # of chunks and DeBERTa scans).
         extracted = extract_text(file_path)
+        extracted["text"] = extracted["text"][: settings.max_extracted_chars]
+        if len(extracted["text"]) == settings.max_extracted_chars:
+            extracted["warnings"] = list(extracted["warnings"]) + [
+                f"Extracted text exceeds {settings.max_extracted_chars} characters; truncated."
+            ]
 
         if not extracted["text"].strip():
             return IngestionResult(
@@ -98,10 +105,40 @@ def ingest_document(
                 f"potential prompt injection (max risk: {scan_summary.max_risk_score:.2f}). "
                 f"Ingested with caution."
             )
+        if scan_summary.errored_chunks > 0:
+            policy_note = (
+                "chunks excluded from retrieval"
+                if settings.scan_fail_policy == "error"
+                else "recorded as scan_error"
+            )
+            warnings.append(
+                f"{scan_summary.errored_chunks} chunk(s) could not be scanned "
+                f"(scanner error); {policy_note}."
+            )
+
+        # With the strict policy, a scanner failure rejects the whole upload:
+        # nothing is stored (no half-tainted state in the vector store) and
+        # the error surfaces to the caller.
+        if scan_summary.errored_chunks > 0 and settings.scan_fail_policy == "error":
+            return IngestionResult(
+                success=False,
+                filename=file_path.name,
+                doc_id=extracted["doc_id"],
+                format=extracted["format"],
+                chunks_created=0,
+                tainted=scan_summary.is_tainted,
+                warnings=warnings,
+                error="scan_failed: prompt-injection scanner error(s) while ingesting; upload rejected (scan_fail_policy=error)",
+            )
 
         # Step 4: Store in ChromaDB
         ids = []
         metadatas = []
+        statuses = [
+            scan_summary.chunk_results[i].status.value
+            if i < len(scan_summary.chunk_results) else "clean"
+            for i in range(len(chunks))
+        ]
         for i, chunk in enumerate(chunks):
             chunk_id = f"{extracted['doc_id']}_chunk_{i:04d}"
             ids.append(chunk_id)
@@ -111,8 +148,8 @@ def ingest_document(
                 "section": chunk.section,
                 "chunk_index": i,
                 "total_chunks": len(chunks),
-                "tainted": scan_summary.chunk_results[i].injection_detected
-                if i < len(scan_summary.chunk_results) else False,
+                "tainted": statuses[i] == "tainted",
+                "scan_status": statuses[i],
                 "format": extracted["format"],
             })
 

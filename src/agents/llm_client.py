@@ -1,10 +1,11 @@
 """LLM client wrapper for OpenRouter API.
 
 All model calls go through this module. Model names come from config,
-never hardcoded.
+never hardcoded. Only the synchronous `call_llm_sync` is used by agents
+(the async twin was dead code and was removed).
 """
+from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import random
@@ -28,6 +29,14 @@ _RETRYABLE_EXCEPTIONS = (
     httpx.NetworkError,
 )
 
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+# Test seam (F-14): pipelines can install a fake callable here:
+#   call_llm_sync(prompt, system_prompt, model, temperature, max_tokens, api_key)
+# returning an LLMResponse. When set, real HTTP calls are never made.
+CALL_LLM_OVERRIDE = None
+
 
 def _retry_delay_seconds(attempt: int, retry_after: str | None) -> float:
     """Compute how long to sleep before the next retry attempt.
@@ -35,10 +44,17 @@ def _retry_delay_seconds(attempt: int, retry_after: str | None) -> float:
     Honors an OpenRouter `Retry-After` header if present (seconds), else
     falls back to exponential backoff with jitter:
     base * 2**attempt + random(0, base).
+
+    `Retry-After` is capped at `llm_retry_after_cap_seconds` so a hostile
+    or misconfigured upstream can't park a worker thread for an unbounded
+    time (a 3600s Retry-After would otherwise hold a thread for an hour).
     """
     if retry_after:
         try:
-            return float(retry_after)
+            return min(
+                float(retry_after),
+                settings.llm_retry_after_cap_seconds,
+            )
         except ValueError:
             pass
     base = settings.llm_retry_backoff_base
@@ -48,6 +64,7 @@ def _retry_delay_seconds(attempt: int, retry_after: str | None) -> float:
 @dataclass
 class LLMResponse:
     """Response from an LLM call."""
+
     content: str
     model: str
     input_tokens: int
@@ -55,166 +72,6 @@ class LLMResponse:
     latency_ms: float
     success: bool
     error: str | None = None
-
-
-async def call_llm(
-    prompt: str,
-    system_prompt: str = "",
-    model: str | None = None,
-    temperature: float = 0.3,
-    max_tokens: int = 2048,
-    response_format: str | None = None,
-    api_key: str | None = None,
-) -> LLMResponse:
-    """Call an LLM via OpenRouter API.
-
-    Args:
-        prompt: User prompt
-        system_prompt: System instruction (optional)
-        model: Model override (defaults to settings.rag_model)
-        temperature: Sampling temperature
-        max_tokens: Max output tokens
-        response_format: "json" for JSON mode (optional)
-        api_key: Per-request OpenRouter key (e.g. supplied by the frontend).
-            Falls back to settings.openrouter_api_key for local/dev setups.
-
-    Returns:
-        LLMResponse with content and metadata
-    """
-    model = model or settings.rag_model
-    resolved_key = api_key or settings.openrouter_api_key
-
-    if not resolved_key:
-        return LLMResponse(
-            content="",
-            model=model,
-            input_tokens=0,
-            output_tokens=0,
-            latency_ms=0.0,
-            success=False,
-            error="No OpenRouter API key configured. Enter your key in the sidebar, "
-                  "or set OPENROUTER_API_KEY for a local/server-side deployment.",
-        )
-
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
-
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    if response_format == "json":
-        payload["response_format"] = {"type": "json_object"}
-
-    headers = {
-        "Authorization": f"Bearer {resolved_key}",
-        "HTTP-Referer": "https://agentic-rag-cv.local",
-        "X-Title": "Agentic RAG CV Matcher",
-        "Content-Type": "application/json",
-    }
-
-    start = time.time()
-    max_retries = settings.llm_max_retries
-    last_error = "Unknown error"
-    last_latency_ms = 0.0
-
-    for attempt in range(max_retries + 1):
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                latency_ms = (time.time() - start) * 1000
-
-                if resp.status_code != 200:
-                    error_text = resp.text[:500]
-                    last_error = f"API error {resp.status_code}: {error_text}"
-                    last_latency_ms = latency_ms
-
-                    if resp.status_code in _RETRYABLE_STATUS_CODES and attempt < max_retries:
-                        logger.warning(
-                            f"LLM call attempt {attempt + 1}/{max_retries + 1} failed with "
-                            f"transient status {resp.status_code}, retrying: {last_error}"
-                        )
-                        delay = _retry_delay_seconds(attempt, resp.headers.get("Retry-After"))
-                        await asyncio.sleep(delay)
-                        continue
-
-                    return LLMResponse(
-                        content="",
-                        model=model,
-                        input_tokens=0,
-                        output_tokens=0,
-                        latency_ms=latency_ms,
-                        success=False,
-                        error=last_error,
-                    )
-
-                data = resp.json()
-                choice = data.get("choices", [{}])[0]
-                content = choice.get("message", {}).get("content", "")
-                usage = data.get("usage", {})
-
-                return LLMResponse(
-                    content=content,
-                    model=model,
-                    input_tokens=usage.get("prompt_tokens", 0),
-                    output_tokens=usage.get("completion_tokens", 0),
-                    latency_ms=latency_ms,
-                    success=True,
-                )
-
-        except _RETRYABLE_EXCEPTIONS as e:
-            latency_ms = (time.time() - start) * 1000
-            last_error = f"Request failed: {str(e)}"
-            last_latency_ms = latency_ms
-
-            if attempt < max_retries:
-                logger.warning(
-                    f"LLM call attempt {attempt + 1}/{max_retries + 1} failed with "
-                    f"transient error, retrying: {last_error}"
-                )
-                delay = _retry_delay_seconds(attempt, None)
-                await asyncio.sleep(delay)
-                continue
-
-            return LLMResponse(
-                content="",
-                model=model,
-                input_tokens=0,
-                output_tokens=0,
-                latency_ms=latency_ms,
-                success=False,
-                error=last_error,
-            )
-
-        except Exception as e:
-            latency_ms = (time.time() - start) * 1000
-            return LLMResponse(
-                content="",
-                model=model,
-                input_tokens=0,
-                output_tokens=0,
-                latency_ms=latency_ms,
-                success=False,
-                error=f"Request failed: {str(e)}",
-            )
-
-    return LLMResponse(
-        content="",
-        model=model,
-        input_tokens=0,
-        output_tokens=0,
-        latency_ms=last_latency_ms,
-        success=False,
-        error=last_error,
-    )
 
 
 def call_llm_sync(
@@ -225,11 +82,23 @@ def call_llm_sync(
     max_tokens: int = 2048,
     api_key: str | None = None,
 ) -> LLMResponse:
-    """Synchronous version of call_llm for use in non-async contexts.
+    """Call an LLM via OpenRouter API (or the installed test override).
 
-    api_key: Per-request OpenRouter key (e.g. supplied by the frontend).
-        Falls back to settings.openrouter_api_key for local/dev setups.
+    Args:
+        prompt: User prompt
+        system_prompt: System instruction (optional)
+        model: Model override (defaults to settings.rag_model)
+        temperature: Sampling temperature
+        max_tokens: Max output tokens
+        api_key: Per-request OpenRouter key (e.g. supplied by the frontend).
+            Falls back to settings.openrouter_api_key for local/dev setups.
+
+    Returns:
+        LLMResponse with content and metadata
     """
+    if CALL_LLM_OVERRIDE is not None:
+        return CALL_LLM_OVERRIDE(prompt, system_prompt, model, temperature, max_tokens, api_key)
+
     model = model or settings.rag_model
     resolved_key = api_key or settings.openrouter_api_key
 
@@ -273,7 +142,7 @@ def call_llm_sync(
         try:
             with httpx.Client(timeout=60.0) as client:
                 resp = client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
+                    OPENROUTER_URL,
                     json=payload,
                     headers=headers,
                 )
