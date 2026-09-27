@@ -4,3 +4,6 @@ data/
 __pycache__/
 *.pyc
 .env
+
+# Code reviews (local only)
+reviews/
