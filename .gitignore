@@ -11,3 +11,7 @@ reviews/
 .venv/
 logs/
 *.log
+
+# Local artifacts & scratch
+artifacts/
+RESUME.md
