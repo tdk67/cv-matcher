@@ -35,6 +35,11 @@ from src.api.deps import get_api_key
 from src.config import settings
 
 _WINDOW_SECONDS = 60.0
+# Hard cap on distinct bucket keys we track. Instead of wiping the whole
+# table when the cap is reached (which would reset EVERY user's accounting
+# - a global denial-of-accounting attack), we evict expired keys and then
+# drop the oldest keys that have no recent hits. A key whose window has
+# passed contributes nothing to enforcement and can be forgotten safely.
 _MAX_TRACKED_KEYS = 10_000
 SESSION_ID_HEADER = "X-Session-ID"
 
@@ -76,14 +81,47 @@ def _session_sub_key(request: Request) -> str | None:
     return hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:16]
 
 
+def _evict_old_and_overflow() -> None:
+    """Drop expired buckets, then the oldest buckets if still over cap.
+
+    Runs while holding `_lock`. Expired keys (all hits older than one
+    window) are removed unconditionally - they contribute nothing to
+    accounting. If the table is still over `_MAX_TRACKED_KEYS`, evict the
+    keys with the OLDEST most-recent hit (LRU-ish) instead of wiping
+    everyone's accounting with a global `clear()`. The hostile case this
+    guards against is a rotating attacker spawning many fresh sub-bucket
+    keys that are all inside the window; dropping the `over` oldest-hit
+    keys is a far cheaper loss than resetting every user's bucket (F4-08).
+    """
+    now = time.monotonic()
+    cutoff = now - _WINDOW_SECONDS
+
+    expired = [k for k, v in _hits.items() if not v or v[-1] <= cutoff]
+    for k in expired:
+        del _hits[k]
+
+    over = len(_hits) - _MAX_TRACKED_KEYS
+    if over <= 0:
+        return
+
+    lru = sorted(
+        _hits.items(),
+        key=lambda kv: kv[1][-1] if kv[1] else 0.0,
+    )
+    for k, _v in lru[:over]:
+        del _hits[k]
+
+
 def _check_and_record(bucket_key: str, limit: int) -> float | None:
     """Record a hit and return seconds to wait if over the limit, else None."""
     now = time.monotonic()
     cutoff = now - _WINDOW_SECONDS
 
     with _lock:
-        if len(_hits) > _MAX_TRACKED_KEYS:
-            _hits.clear()
+        # Enforce the key cap BEFORE recording (table may already be over
+        # from a prior burst) and AFTER (this record may push it over).
+        if len(_hits) >= _MAX_TRACKED_KEYS:
+            _evict_old_and_overflow()
 
         timestamps = [t for t in _hits.get(bucket_key, []) if t > cutoff]
 
@@ -94,6 +132,9 @@ def _check_and_record(bucket_key: str, limit: int) -> float | None:
 
         timestamps.append(now)
         _hits[bucket_key] = timestamps
+
+        if len(_hits) >= _MAX_TRACKED_KEYS:
+            _evict_old_and_overflow()
         return None
 
 

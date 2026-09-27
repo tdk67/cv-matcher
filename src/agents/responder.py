@@ -121,7 +121,17 @@ def respond(ctx: PipelineContext, api_key: str | None = None) -> PipelineContext
         from src.agents.context import MatchCandidate
         content = response.content.strip()
         result = parse_json_robust(content)
-        ctx.answer = result.get("answer", "")
+        if not isinstance(result, dict):
+            raise ValueError("response is not a JSON object")
+        # F4-10: an empty `answer` string is a malformed response, not a valid
+        # "no answer". If we let it through, the Validator fails it ("No answer
+        # generated"), retries exhaust, and the UI renders an empty answer body
+        # under a "Validation warning" badge. Treat it as a parse failure so
+        # the caller can retry/handle it loudly.
+        answer = result.get("answer", "")
+        if not isinstance(answer, str) or not answer.strip():
+            raise ValueError("'answer' field missing or empty: {answer!r}".format(answer=answer))
+        ctx.answer = answer
         ctx.citations = result.get("matches", [])[:3]  # Strictly limit to top 3 matches
         
         ctx.match_candidates = []

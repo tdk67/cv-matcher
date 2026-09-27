@@ -38,6 +38,7 @@ def ingest_document(
     file_path: Path,
     vector_store: CVVectorStore,
     scanner=None,
+    final_filename: str | None = None,
 ) -> IngestionResult:
     """Ingest a single document through the full pipeline.
 
@@ -51,10 +52,18 @@ def ingest_document(
         file_path: Path to the document file
         vector_store: ChromaDB store instance
         scanner: Pre-initialized LLM Guard scanner (optional)
+        final_filename: Logical document name used for the `doc_id` hash and
+            chunk metadata. Defaults to `file_path.name`. The upload flow
+            ingests from a random temp name (`.uploading-<pid>-<rand>-<name>`)
+            and passes the real name here so that
+            `doc_id = sha256(final_filename + content)` stays stable across
+            re-uploads of identical content (F4-05) and the duplicate-ingest
+            warning in `add_chunks` works.
 
     Returns:
         IngestionResult with stats and warnings
     """
+    display_name = Path(final_filename).name if final_filename else file_path.name
     try:
         # Step 1: Extract text (capped so a small file that expands to
         # megabytes of text can't turn into a CPU/memory DoS via thousands
@@ -66,10 +75,20 @@ def ingest_document(
                 f"Extracted text exceeds {settings.max_extracted_chars} characters; truncated."
             ]
 
+        # doc_id must hash the FINAL filename (not the temp upload name), so
+        # identical re-uploads produce identical ids and the add_chunks
+        # duplicate warning fires (F4-05). The chunks are still tagged with
+        # `file_path.name` (the temp name) so the upload swap in
+        # `ingest_upload` -> `replace_source` can atomically delete the old
+        # version (tagged `safe_filename`) and rename the new chunks into
+        # place under one lock.
+        from src.ingestion.extractors import _compute_doc_id
+        extracted["doc_id"] = _compute_doc_id(display_name, extracted["text"])
+
         if not extracted["text"].strip():
             return IngestionResult(
                 success=False,
-                filename=file_path.name,
+                filename=display_name,
                 doc_id=extracted["doc_id"],
                 format=extracted["format"],
                 chunks_created=0,
@@ -84,7 +103,7 @@ def ingest_document(
         if not chunks:
             return IngestionResult(
                 success=False,
-                filename=file_path.name,
+                filename=display_name,
                 doc_id=extracted["doc_id"],
                 format=extracted["format"],
                 chunks_created=0,
@@ -123,7 +142,7 @@ def ingest_document(
         if scan_summary.errored_chunks > 0 and settings.scan_fail_policy == "error":
             return IngestionResult(
                 success=False,
-                filename=file_path.name,
+                filename=display_name,
                 doc_id=extracted["doc_id"],
                 format=extracted["format"],
                 chunks_created=0,
@@ -162,7 +181,7 @@ def ingest_document(
 
         return IngestionResult(
             success=True,
-            filename=file_path.name,
+            filename=display_name,
             doc_id=extracted["doc_id"],
             format=extracted["format"],
             chunks_created=len(chunks),
@@ -171,10 +190,10 @@ def ingest_document(
         )
 
     except Exception as e:
-        logger.exception(f"Ingestion failed for {file_path.name}: {str(e)}")
+        logger.exception(f"Ingestion failed for {display_name}: {str(e)}")
         return IngestionResult(
             success=False,
-            filename=file_path.name,
+            filename=display_name,
             doc_id="",
             format="",
             chunks_created=0,
@@ -211,7 +230,7 @@ def ingest_upload(
         # the new bytes fail to extract/chunk/scan (no data-loss path).
         tmp_path.write_bytes(file_content)
 
-        result = ingest_document(tmp_path, vector_store, scanner)
+        result = ingest_document(tmp_path, vector_store, scanner, final_filename=safe_filename)
 
         if not result.success:
             # Rejected upload: nothing may be left in the upload dir. The raw

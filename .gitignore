@@ -15,3 +15,4 @@ reviews/
 # Local artifacts & scratch
 artifacts/
 RESUME.md
+.env.backend

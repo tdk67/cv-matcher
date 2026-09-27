@@ -2,6 +2,7 @@
 
 import logging
 import secrets
+import time
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -51,12 +52,48 @@ _configure_logging()
 logger = logging.getLogger(__name__)
 
 
+def _sweep_stale_upload_temp_files(max_age_seconds: int = 3600) -> None:
+    """Remove orphaned `.uploading-*` files from the upload dir.
+
+    The upload pipeline writes to a temp name (`.uploading-<pid>-<rand>-<name>`)
+    and unlinks it on failure, but a crash mid-ingest (the classic case is
+    OOM during the DeBERTa scan) leaves it behind. Those files were never
+    ingested, so they are dead weight AND reachable via /content if the name
+    is guessed. Startup is the right place to sweep: any temp file older than
+    an hour cannot belong to an in-flight upload.
+    """
+    try:
+        upload_dir = settings.upload_path
+        if not upload_dir.exists():
+            return
+        cutoff = time.time() - max_age_seconds
+        removed = 0
+        for p in upload_dir.glob(".uploading-*"):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    p.unlink(missing_ok=True)
+                    removed += 1
+            except OSError:
+                pass
+        if removed:
+            logger.info("Startup sweep removed %d stale .uploading-* temp file(s) from %s", removed, upload_dir)
+    except Exception as e:  # noqa: BLE001 - startup must not fail on cleanup
+        logger.warning("Startup upload-temp sweep failed: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Ensure data directories exist on startup and pre-warm models sequentially."""
     settings.chroma_path.mkdir(parents=True, exist_ok=True)
     settings.upload_path.mkdir(parents=True, exist_ok=True)
     Path(".data/evaluation").mkdir(parents=True, exist_ok=True)
+
+    # F4-07: sweep stale upload temp files. A crash mid-ingest (OOM during a
+    # DeBERTa scan is the plausible case) leaves a `.uploading-*` file behind;
+    # the unlink-on-failure path never runs for a dead process. They are
+    # servable via /content if the (guessable-ish) name is known, so remove
+    # any older than 1h at startup.
+    _sweep_stale_upload_temp_files()
 
     # Pre-warm scanner and vector store to avoid threading/meta-tensor issues in parallel uploads
     try:

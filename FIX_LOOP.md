@@ -51,6 +51,19 @@ Fixer agent: **AdaL (`--agent-mode engineer`, different model than reviewer)** �
 - F2-17: synthetic endpoint cleans stale files + counts reported by generator; email uniqueness fix; `_extract_excel` reads sheet names before close.
 - P3: json_store atomic writes (tmp+rename); `datetime.utcnow()` → timezone-aware; config fail-fast.
 
+### Review-04 fixes (F4-01…F4-11) — DONE (2026-09-28)
+- F4-01: Planner fails CLOSED — missing/non-bool `is_in_scope` or unknown `query_type` raises (matches Validator).
+- F4-02: honest README rate-limit claims per topology (Docker shared bucket, reverse-proxy per-IP, Cloud shared egress); `--forwarded-allow-ips=127.0.0.1` so XFF is trusted only from loopback; Streamlit Cloud deployment documented (`API_BASE_URL` secret). Public backend live at https://cv-matcher.taskmind-ai.com.
+- F4-03: `rate_limits.upload` (default 10/min) wired on `POST /api/documents/upload` + regression test.
+- F4-04: retry sleep clamped to the remaining pipeline deadline (both retry paths).
+- F4-05: `doc_id` hashes the FINAL filename (not the temp upload name) — identical re-uploads keep the same doc_id, duplicate-ingest warning works.
+- F4-06: extraction caps applied DURING extraction (per-format loops bail at `max_extracted_chars`), not post-hoc.
+- F4-07: startup sweep removes stale `.uploading-*` temp files older than 1h.
+- F4-08: rate-limit key table evicts expired keys + LRU overflow instead of a global `_hits.clear()` (no cross-user reset).
+- F4-09: `store.query()` clamps `n_results` inside the collection lock (TOCTOU on count).
+- F4-10: Responder treats empty/missing `answer` as a parse failure (fail-closed, no empty answer body under a warning badge).
+- F4-11: conftest isolation fixture also resets the scanner singleton.
+
 ## Verification gate per round (owner=pi)
 1. `git diff --stat` reviewed; no secrets, no `.env`, no stray files.
 2. `python -m compileall src app.py` and `pytest tests/ -x -q` pass (live-LLM tests stubbed).

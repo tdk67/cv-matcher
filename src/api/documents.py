@@ -2,13 +2,14 @@
 
 import logging
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from pydantic import BaseModel
 
 from src.config import settings
 from src.vectorstore.store import CVVectorStore, get_vector_store
 from src.ingestion.pipeline import ingest_upload, remove_document
 from src.utils.filenames import repair_mojibake_filename
+from src.api.ratelimit import rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,11 @@ def _read_upload_bounded(file: UploadFile) -> bytes:
     return b"".join(chunks)
 
 
-@router.post("/upload", response_model=UploadResponse)
+@router.post(
+    "/upload",
+    response_model=UploadResponse,
+    dependencies=[Depends(rate_limit("upload"))],
+)
 def upload_document(file: UploadFile = File(...)):
     """Upload and ingest a document (PDF, TXT, CSV, Excel)."""
     filename = Path(repair_mojibake_filename(file.filename)).name

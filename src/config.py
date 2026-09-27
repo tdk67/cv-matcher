@@ -140,7 +140,7 @@ class Settings(BaseSettings):
         "cors_origins", ["http://localhost:8501", "http://127.0.0.1:8501"]
     )
     rate_limits: dict = _dict_or_default(
-        "rate_limits", {"query": 30, "evaluation_start": 2, "key_validate": 10}
+        "rate_limits", {"query": 30, "evaluation_start": 2, "key_validate": 10, "upload": 10}
     )
 
     # Evaluation Config

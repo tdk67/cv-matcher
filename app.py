@@ -1,7 +1,7 @@
 """Agentic RAG CV Matcher - Streamlit Frontend.
 
 Pages: Home, Query, Documents, Dashboard, Evaluation
-Backend: FastAPI at http://localhost:8000
+Backend: FastAPI (see API_BASE_URL below).
 """
 
 import streamlit as st
@@ -13,7 +13,22 @@ from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 # --- Config ---------------------------------------------------------------
 
-API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000")
+# Backend base URL, resolved in priority order:
+#  1. API_BASE_URL env var - set by the shipped Docker one-container build
+#     (http://localhost:8000), by local dev, and by Streamlit Cloud as a
+#     deployment secret (https://cv-matcher.taskmind-ai.com - the public host
+#     where nginx path-routes /api/* to the FastAPI backend).
+#  2. CV_MATCHER_API_BASE_DEFAULT - optional override for the fallback.
+#  3. http://localhost:8000 - plain `streamlit run app.py` on a dev machine.
+#
+# NOTE: Streamlit Community Cloud runs ONLY this frontend process - there is
+# no FastAPI next to it, so localhost:8000 does not exist there. Set
+# API_BASE_URL=https://cv-matcher.taskmind-ai.com as a Cloud secret (or as
+# an env var on any deployment where the backend is not on localhost).
+API_BASE = os.getenv(
+    "API_BASE_URL",
+    os.getenv("CV_MATCHER_API_BASE_DEFAULT", "http://localhost:8000"),
+)
 API_TIMEOUT = 120.0
 API_KEY_HEADER = "X-OpenRouter-Key"
 

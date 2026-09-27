@@ -91,6 +91,8 @@ docker run -p 8501:8501 \
 - The FastAPI backend binds `127.0.0.1` inside the container (see `docker-entrypoint.sh`) and is reached by the frontend over localhost - it is **not** published with `-p 8000:8000`. The default `api_auth_token` is empty, so publishing port 8000 to the host would expose upload/delete/query/eval to the network with auth off; leave it unpublished and/or set `API_AUTH_TOKEN` for any deployment where the backend might be reachable.
 - Do **not** set `OPENROUTER_API_KEY` in the container's environment for a public deployment - see [API Key Handling](#api-key-handling) above.
 
+The app is also deployed live at **https://cv-matcher.taskmind-ai.com** (Streamlit frontend + FastAPI backend on one host; nginx path-routes `/api/*` to the backend and everything else to Streamlit, both behind one TLS cert). The Streamlit Community Cloud app (`cv-matcher-tdeak67.streamlit.app`) is a frontend-only deployment that must be pointed at that backend via an `API_BASE_URL` secret - see [Streamlit Community Cloud](#streamlit-community-cloud-frontend-only-deployment).
+
 
 ## Deployment & Security Configuration
 
@@ -111,18 +113,34 @@ Cross-origin browser requests are locked to `cors_origins` in `config.json` (def
 
 ### Rate limiting
 
-Per-minute limits are configured under `rate_limits` (defaults: `query: 30`, `evaluation_start: 2`, `key_validate: 10`) and enforced by an in-process sliding-window limiter. Every request is charged to a **hard bucket** keyed on client IP + a hash of the OpenRouter key; when the frontend also sends the optional `X-Session-ID` header, the request is additionally charged to a per-session sub-bucket. This splits the limit per-user even in the shipped Docker topology, where every user's traffic arrives from one IP (Streamlit calls FastAPI over localhost inside the container) — while the session header remains client-controlled, it can only *split* a hard bucket, never reset it, so rotating/forging it cannot bypass the per-IP limit. The limits are per-process, so they reset on restart; scale-out would need a shared store.
+Per-minute limits are configured under `rate_limits` (defaults: `query: 30`, `evaluation_start: 2`, `key_validate: 10`, `upload: 10`) and enforced by an in-process sliding-window limiter. Every request is charged to a **hard bucket** keyed on client IP + a hash of the OpenRouter key; when the frontend also sends the optional `X-Session-ID` header, the request is additionally charged to a per-session sub-bucket.
+
+How the buckets behave in each topology (honest picture):
+
+- **Single-container Docker deploy** (`docker-entrypoint.sh`): the frontend calls FastAPI over `localhost`, so every request arrives from `127.0.0.1` and ALL users share one hard per-IP bucket (`query: 30/min` combined). The `X-Session-ID` sub-bucket then *splits* that shared budget per browser session - it can only make the shared limit stricter per session, never looser. A single busy user can exhaust the shared 30/min for everyone; raise `query` if that's a problem.
+- **Public reverse-proxy deploy** (nginx in front, `--proxy-headers` + `--forwarded-allow-ips=127.0.0.1`): nginx sets `X-Forwarded-For` from the real client IP, and uvicorn trusts it **only when it comes from loopback**, so the hard bucket is per-real-IP and external clients cannot spoof it.
+- **Streamlit Community Cloud** (see below): the frontend runs on Streamlit's servers, so the backend sees Streamlit's shared egress IP. The hard bucket is again shared across all Cloud users; the `X-Session-ID` sub-bucket is the only per-user split there.
+
+In every topology the session header is client-controlled, so it can only *split* a hard bucket, never replace it - rotating/forging it cannot bypass the IP-level limit. The limits are per-process (they reset on restart; scale-out needs a shared store). When the tracked-key table hits its cap (10k keys), expired buckets are pruned and only the oldest LRU buckets are evicted - never a global wipe of everyone's accounting.
 
 ### Upload & query limits
 
 - `max_upload_size_mb` (default 50) - uploads are read in 1 MB chunks and rejected with `413` as soon as the cap is exceeded (no full slurp into RAM).
-- `max_extracted_chars` (default 200 000) - extracted text is capped so a small PDF/xlsx that expands to megabytes cannot produce thousands of chunks.
+- `max_extracted_chars` (default 200 000) - applied DURING extraction, not after: every extractor (PDF/CSV/xlsx/txt) bails out of its page/row loops at the cap, so a zip-bomb xlsx or a 5000-page PDF cannot materialize unbounded text in memory.
 - `max_query_length` (default 500) - longer questions are rejected with `400`.
-- `pipeline_deadline_seconds` (default 100) - wall-clock budget for one full query. The Streamlit frontend abandons a request after 120 s; without this budget the backend could keep retrying and spend your tokens on a request nobody is waiting for. Set to `0` to disable.
+- `pipeline_deadline_seconds` (default 100) - wall-clock budget for one full query. The Streamlit frontend abandons a request after 120 s; without this budget the backend could keep retrying and spend your tokens on a request nobody is waiting for. Retry sleeps are clamped to the remaining budget too, so a burst of `Retry-After` waits cannot overshoot it. Set to `0` to disable.
 
 ### Running behind a reverse proxy
 
-If you front the API with nginx/Cloud Run/etc., run uvicorn with `--proxy-headers` (the shipped `docker-entrypoint.sh` already does) and make sure the proxy sets `X-Forwarded-For` so the rate limiter sees real client IPs.
+If you front the API with nginx/Cloud Run/etc., run uvicorn with `--proxy-headers` (the shipped `docker-entrypoint.sh` does) and make sure the proxy sets `X-Forwarded-For` so the rate limiter sees real client IPs. For security, restrict which upstreams are trusted to set that header: `uvicorn src.main:app --proxy-headers --forwarded-allow-ips=127.0.0.1` trusts XFF only from nginx on loopback - external clients cannot spoof their IP to the rate limiter.
+
+### Streamlit Community Cloud (frontend-only deployment)
+
+Streamlit Community Cloud runs ONLY the Streamlit frontend - there is no FastAPI backend next to it, so the default `http://localhost:8000` fails with "Cannot connect to API". Point the UI at a publicly hosted backend:
+
+1. Deploy the backend somewhere reachable over HTTPS (this repo's Docker image runs both processes and works as-is on a VM/Cloud Run - see "Where to host it").
+2. Set the Streamlit Cloud app's secret `API_BASE_URL` to the backend's public URL, e.g. `https://cv-matcher.taskmind-ai.com` (nginx path-routes `/api/*` to FastAPI on the same host - no separate API subdomain needed).
+3. Redeploy the Streamlit app. All `httpx` calls from the frontend then hit that URL; the rate limiter sees Streamlit's shared egress IP (see Rate limiting above).
 
 ---
 

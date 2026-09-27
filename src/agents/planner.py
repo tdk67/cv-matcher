@@ -78,8 +78,27 @@ def plan(ctx: PipelineContext, api_key: str | None = None) -> PipelineContext:
         content = response.content.strip()
         result = parse_json_robust(content)
 
-        ctx.query_type = result.get("query_type", "unknown")
-        ctx.is_in_scope = result.get("is_in_scope", True)
+        if not isinstance(result, dict):
+            raise ValueError("response is not a JSON object")
+
+        # Fail-closed on scope classification (mirrors the Validator's
+        # fail-closed handling of `passed`): a missing or non-bool
+        # `is_in_scope` means the LLM produced malformed/truncated output,
+        # and answering an out-of-scope query as if it were in scope is a
+        # safety failure. Treat it as a parse error so the caller fails
+        # loudly instead of silently serving a potentially out-of-scope
+        # answer. `query_type` being absent or not one of the known values
+        # is treated the same way ("unknown" would otherwise reach
+        # retrieval with no way to tell scope).
+        is_in_scope = result.get("is_in_scope")
+        if not isinstance(is_in_scope, bool):
+            raise ValueError(f"'is_in_scope' field missing or not a boolean: {is_in_scope!r}")
+        query_type = result.get("query_type")
+        if query_type not in ("keyword", "similarity", "complex", "out_of_scope"):
+            raise ValueError(f"'query_type' missing or unknown: {query_type!r}")
+
+        ctx.query_type = query_type
+        ctx.is_in_scope = is_in_scope
         ctx.rejection_reason = result.get("rejection_reason", "")
         ctx.extracted_skills = result.get("extracted_skills", [])
         ctx.extracted_requirements = result.get("extracted_requirements", ctx.query)

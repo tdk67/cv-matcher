@@ -93,6 +93,17 @@ def _isolate_runtime_dirs(tmp_path, monkeypatch):
     store_mod._shared_store_instance = None
     store_mod._shared_store_dir = None
 
+    # Reset the scanner singleton too (F4-11): create_scanner raises on a
+    # threshold mismatch, so a test that monkeypatches injection_threshold
+    # and calls create_scanner would trip the (correct) guard and look like
+    # a product bug.
+    try:
+        import src.guardrails.scanner as scanner_mod
+        scanner_mod._shared_scanner = None
+        scanner_mod._shared_scanner_threshold = None
+    except Exception:  # noqa: BLE001 - never fail collection on import hiccup
+        pass
+
     # Fresh rate-limit accounting per test: buckets are process-global, so
     # without this the TestRateLimit cases would bleed 429s into each other.
     try:

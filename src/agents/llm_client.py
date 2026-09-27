@@ -208,7 +208,15 @@ def call_llm_sync(
                             f"transient status {resp.status_code}, retrying: {last_error}"
                         )
                         delay = _retry_delay_seconds(attempt, resp.headers.get("Retry-After"))
-                        time.sleep(delay)
+                        # F4-04: never sleep longer than the remaining caller
+                        # budget - a burst of Retry-After sleeps (or a slow
+                        # backoff) could otherwise overshoot the pipeline
+                        # deadline by up to 60s per attempt.
+                        remaining = _deadline_remaining()
+                        if remaining is not None:
+                            delay = min(delay, remaining)
+                        if delay > 0:
+                            time.sleep(delay)
                         continue
 
                     return LLMResponse(
@@ -246,7 +254,12 @@ def call_llm_sync(
                     f"transient error, retrying: {last_error}"
                 )
                 delay = _retry_delay_seconds(attempt, None)
-                time.sleep(delay)
+                # F4-04: clamp to the remaining deadline (see above).
+                remaining = _deadline_remaining()
+                if remaining is not None:
+                    delay = min(delay, remaining)
+                if delay > 0:
+                    time.sleep(delay)
                 continue
 
             return LLMResponse(

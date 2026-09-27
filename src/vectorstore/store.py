@@ -138,14 +138,20 @@ class CVVectorStore:
         if self.count() == 0:
             return []
 
-        query_params = {
-            "query_texts": [query_text],
-            "n_results": min(n_results, self.count()),
-        }
-        if where:
-            query_params["where"] = where
-
         with self._mutex:
+            # F4-09: clamp n_results INSIDE the lock. ChromaDB rejects
+            # n_results > collection size with an error; count() was checked
+            # just above, but a concurrent delete between the two locked
+            # sections could make n_results exceed the now-smaller collection.
+            size = self._collection.count()
+            if size == 0:
+                return []
+            query_params = {
+                "query_texts": [query_text],
+                "n_results": min(n_results, size),
+            }
+            if where:
+                query_params["where"] = where
             results = self._collection.query(**query_params)
 
         output = []
